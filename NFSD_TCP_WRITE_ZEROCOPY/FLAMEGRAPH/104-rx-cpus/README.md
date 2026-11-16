@@ -1809,3 +1809,20 @@ happens.  t2-r759, the last two-port split run, hung the host on the
 module before the RXOWN fix.  Run through `step.sh
 /var/tmp/zc-run-logs/split3-534 r767`; if the host goes down, the last
 `zc-step` line in the client's netconsole log names it.
+
+**t2-r767 (20:55): the split on both ports ran to the end, no hang,
+but read 61.94 GB/s against t2-r766's 71.52 at split N**, the same run
+on the same module minutes before: 31.10 GB/s on port a and 30.84 on
+port b, 8.56 and 8.63 ms mean completion (13.04 and 13.17 at the 99th
+percentile), each drive reading 7.7 to 7.8 GB/s at 99 to 100% busy
+(8.8 to 8.9 in r766), no drive stepped down, no FIFO drop, 5 and 59
+ring drops, 82 client retransmits, no new `WARNING:`, `BUG:`, lockup
+or `svc_rtc:` wait report, and `settled.sh apply` clean after with
+split back at N.  rtc stats over the run: 11.8 M diverted, 11.8 M sends
+in 9.1 M batches (1.3 sends a batch), `budget_exhausted` 27 k,
+**`fallback_conn_full` 29 k** (a connection at its 32 parked calls, so
+the call goes to a thread unreceived), `fallback_no_peek` 3 k.  So on
+two ports the split is safe on this module and **costs 13% of the read
+rate**: the hang of t2-r759 does not come back, the gain it was made
+for does not show.  Whether it is worth a profile or is dropped is
+Mike's.
