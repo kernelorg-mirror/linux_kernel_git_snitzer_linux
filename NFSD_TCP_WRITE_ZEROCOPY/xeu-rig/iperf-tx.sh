@@ -3,8 +3,10 @@
 # carries OUT of one port, the other, or both at once with no NFS and no
 # drives (16 November, round 104: the READ direction): <streams> iperf3
 # processes on each port, the senders on nfsd's CPUs (8-55), the client
-# receiving (iperf3 -R), sendfile zero-copy (-Z) as nfsd sends page
-# references, LEN (256K) a write.  The rate is read from the port's
+# receiving (iperf3 -R), LEN (256K) a write.  The senders copy: -Z is
+# not passed to a reversed server (iperf3 3.17 writes with write(2), and
+# its server refuses -Z), so they pay a copy nfsd's page references do
+# not.  The rate is read from the port's
 # tx_bytes over the middle of the run.  iperf2port.sh is the other way.
 # Ports as twoport.sh has them.
 . "$(dirname "$0")/common.sh"
@@ -16,7 +18,12 @@ SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=10 -o Ser
 fifo() { ethtool -S $1 | awk '/port_rx_fifo_tc[0-9]_drop_packets/{s+=$2} END{print s+0}'; }
 ringdrop() { ethtool -S $1 | awk '/rx_hw_tail_drop_packets/{s+=$2} END{print s+0}'; }
 rxbytes() { cat /sys/class/net/$1/statistics/tx_bytes; }
-shares() { for q in /sys/class/net/$1/queues/tx-*; do cat $q/byte_queue_limits/inflight 2>/dev/null || echo 0; done | tr '\n' ' '; }
+# each TX ring's counters (packets, bytes, stops, wakes, TSO sends), to
+# take a difference of: bytes over packets is the size of what the stack
+# handed the ring
+txrings() { ethtool -S $1 | awk '$1 ~ /^ring_[0-9]+_tx_(packets|bytes|tx_stop_q|tx_wake_q|tso|hw_dropped):$/ {sub(/:$/, "", $1); print $1, $2}'; }
+txdiff() { awk 'NR == FNR {a[$1] = $2; next} {d = $2 - a[$1]; split($1, k, "_"); r = k[2]; f = $1; sub(/^ring_[0-9]+_tx_/, "", f); v[r, f] = d; R[r] = 1}
+	END {for (r = 0; r in R; r++) printf "      tx ring %d: %.2f GB/s, %.0fk sends/s, %.0f KiB a send, TSO %.0f%%, stops %d, wakes %d, hw drops %d\n", r, v[r, "bytes"] / w / 1e9, v[r, "packets"] / w / 1e3, v[r, "packets"] ? v[r, "bytes"] / v[r, "packets"] / 1024 : 0, v[r, "packets"] ? 100 * v[r, "tso"] / v[r, "packets"] : 0, v[r, "tx_stop_q"], v[r, "tx_wake_q"], v[r, "hw_dropped"]}' w=$3 $1 $2; }
 client_free || exit 1
 trap 'pkill -x iperf3; pkill -f "[w]ire-rcv[.]py"; $SSHC "pkill -x iperf3; pkill -f "[w]ire-snd[.]py"" < /dev/null; echo N > /sys/module/xeu/parameters/rx_port_stats' EXIT
 echo Y > /sys/module/xeu/parameters/rx_port_stats
@@ -30,23 +37,29 @@ c=""
 	for p in $PORTS; do for i in $(seq $N); do
 		taskset -c 8-55 iperf3 -s -1 -B ${SRV[$p]} -p $(( 5200 + i )) > /dev/null 2>&1 &
 	done; done
-	for p in $PORTS; do c="$c for i in \$(seq $N); do iperf3 -c ${SRV[$p]} -B ${CLI[$p]} -p \$(( 5200 + i )) -t $SECS -R -Z -l ${LEN:-256K} > /dev/null 2>&1 & done;"; done
+	for p in $PORTS; do c="$c for i in \$(seq $N); do iperf3 -c ${SRV[$p]} -B ${CLI[$p]} -p \$(( 5200 + i )) -t $SECS -R -l ${LEN:-256K} > /dev/null 2>&1 & done;"; done
 sleep 2
 $SSHC "$c wait" < /dev/null &
 W=$(( SECS - 8 )); sleep 5
-declare -A F0 T0 B0 S0
-for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); S0[$p]=$(shares $d); done
+declare -A F0 T0 B0
+for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); txrings $d > /tmp/.iperf-tx-$p.0; done
 echo 1 > $RG
 mpstat -P ALL $W 1 > /tmp/.iperf-tx-mpstat 2>&1 &
+# the client receiving: its CPUs, and its ports' receive drops (dropped
+# and missed, as ip -s link counts them)
+cdrops() { $SSHC "for d in ens3np0 ens6np0; do ip -s -s link show dev \$d; done" < /dev/null | awk '/RX:/ {getline; d += $4; m += $5} END {print d + m}'; }
+CD0=$(cdrops)
+$SSHC "mpstat -P ALL $W 1" > /tmp/.iperf-tx-cmpstat 2>&1 < /dev/null &
 sleep $W
 tot=0
 for p in $PORTS; do
-	d=${DEV[$p]}; f1=$(fifo $d); t1=$(ringdrop $d); b1=$(rxbytes $d); s1=$(shares $d)
-	sh=$(paste <(tr ' ' '\n' <<< "${S0[$p]}") <(tr ' ' '\n' <<< "$s1") | awk 'NF == 2 {d[NR] = $2 - $1; s += d[NR]} END {for (i = 1; i <= NR; i++) if (d[i] != "") printf "%s%d", (i > 1 ? "/" : ""), 100 * d[i] / s + 0.5}')
+	d=${DEV[$p]}; f1=$(fifo $d); t1=$(ringdrop $d); b1=$(rxbytes $d); txrings $d > /tmp/.iperf-tx-$p.1
 	r=$(awk -v b=$(( b1 - ${B0[$p]} )) -v w=$W 'BEGIN {printf "%.2f", b / w / 1e9}')
 	tot=$(awk -v a=$tot -v b=$r 'BEGIN {printf "%.2f", a + b}')
 	echo "port $p $d: $r GB/s sent, FIFO drops $(( f1 - ${F0[$p]} )), ring drops $(( t1 - ${T0[$p]} ))"
+	txdiff /tmp/.iperf-tx-$p.0 /tmp/.iperf-tx-$p.1 $W
 done
 wait
-echo "$WHICH iperf3 -R -Z -l ${LEN:-256K}, $N streams a port: total $tot GB/s sent"
+echo "$WHICH iperf3 -R -l ${LEN:-256K}, $N streams a port: total $tot GB/s sent"
 awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; c = $2 + 0; if (c < 8) a += b; else if (c >= 56) z += b; else n += b} END {printf "CPUs busy: rings of a %.0f%%, rings of b %.0f%%, senders (8-55) %.0f%%\n", a / 8, z / 8, n / 48}' /tmp/.iperf-tx-mpstat
+awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; n++; t += b; so += $8; if (b > 90) h++; if (b > m) m = b} END {printf "client CPUs: mean %.0f%% busy (softirq %.0f%%), %d over 90%%, busiest %.0f%%; receive drops %d\n", t / n, so / n, h, m, d}' d=$(( $(cdrops) - CD0 )) /tmp/.iperf-tx-cmpstat
