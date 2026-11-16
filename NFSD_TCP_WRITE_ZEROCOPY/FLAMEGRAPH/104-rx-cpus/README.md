@@ -1978,3 +1978,36 @@ READ's pages.  `ss`'s queues were parsed after the run
 (`client-read.py` read the wrong columns); the probe now also reads the
 server's diskstats and, with `SRV=rtcread`, the server's stages.
 Next: t2-r774, the same with `SRV=rtcread`.
+
+**t2-r774, the same with `SRV=rtcread`: 71.77 GB/s** (the probe costs
+about 0.7 to 1.7).  A 256 KiB READ's 5.58 ms on the client, every term
+measured in this run (`mountstats`, `ss` at both ends, `rtcread.bt`,
+diskstats), the socket waits by Little's law at 2.99 GB/s and 11.4k
+calls a second a socket:
+
+| where | ms | how |
+|---|---|---|
+| client: task start to the call's transmit | 0.43 | mountstats queue |
+| **server: the call unread in its socket** | **3.4** | Recv-Q 5,384 bytes a socket = 38 calls of 140 bytes |
+| server: submit to I/O done (drive 220 us a command, 6.6 in flight) | 0.22 | rtcread.bt, diskstats |
+| server: the work item picks the completion up | 0.05 | rtcread.bt |
+| server: encode, FIFO, `xpt_mutex` | 0.05 | rtcread.bt |
+| server: the send | 0.02 | rtcread.bt |
+| server: the reply in Send-Q | 0.15 | Send-Q 0.44 MB |
+| wire, both ways | 0.15 to 0.18 | ss rtt |
+| client: the reply unread in its socket | 0.81 | Recv-Q 2.43 MB |
+| client: after the reply | 0.08 | mountstats |
+| sum | 5.4 | (rtt measured 5.06 + queue 0.43 = 5.49) |
+
+**The largest wait is on the server, before the call is read: 3.4 ms of
+5.6.**  Every one of the 24 server sockets holds calls (2.0 to 8.3 KB,
+14 to 60 calls).  The connection's rtc work item reads one call a pass
+and is the connection's only reader; its CPU is 70 to 84% busy where it
+carries one connection, and **100% on the five CPUs that carry two
+(10 of the 24 connections; `placed` 22:2 30:2 39:2 42:2 50:2)**.  The
+client spreads its READs over the transports in turn and a 1 MiB READ
+ends with the last of its four, so the slowest connections set
+everyone's pace, and in the closed loop all the transports fill to
+the same 54 READs pending.  The client's own share is 1.3 ms (0.43
+before the transmit, 0.81 reading replies, 0.08 after), with its CPUs
+70 to 86% busy, 27% of their cycles in copying replies.
