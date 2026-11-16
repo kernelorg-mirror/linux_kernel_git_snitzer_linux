@@ -2175,3 +2175,42 @@ and by CPU group the pages allocated and freed, those taken from the
 buddy lists under the zone lock and those the per-CPU lists drained
 back to it.  `client-read.sh` now runs any `SRV=<name>.bt` of this
 directory in its window.
+
+### The reply pages, traced: t2-r780
+
+`SRV=replypages client-read.sh 780` (step `r780` in
+`/var/tmp/zc-run-logs/rprof-534/`), build 534's own sunrpc without the
+split, settled, `svc_tcp_rx_region_reads` N.  **50.33 GB/s, not a
+figure to set beside the strobe's**: `mm_page_free` fires about 2 M
+times a second and the trace costs the rate.  Over its 5 s, pages of
+16 KiB:
+
+| | rtc CPUs (8-55) | ring CPUs (0-7, 56-63) |
+|---|---|---|
+| taken from the buddy lists under the zone lock (`mm_page_alloc_zone_locked`) | **8,062,732** | 7,410 |
+| freed (`mm_page_free`) | 3,710,945 | **6,344,685** |
+| drained from the per-CPU lists back to the zone (`mm_page_pcpu_drain`) | 15,346 | **9,681,574** |
+
+8.06 M pages in 5 s is 1.6 M a second, 26 GB/s: about half of what
+was sent at 50 GB/s.  **Each of those pages takes the zone lock twice:**
+the rtc CPU that fills a READ's `rq_pages` finds its per-CPU list empty
+and refills it from the buddy lists (`rmqueue_bulk()`), and the ring CPU
+that frees the page when TCP's ACK releases the skb overflows its own
+per-CPU list and drains it to the zone (`free_pcppages_bulk()`).  The
+pages move one way, from the ring CPUs to the rtc CPUs, through the zone
+lock.  That is r779's 3.2 us of zone-lock spin in `rmqueue_bulk()` on
+the rtc CPU and part of its 5.5 us of free on the ring CPU.
+
+The page followed one in 64 saw none of the reply pages: `svc_alloc_arg()`
+takes them with `alloc_pages_bulk()`, which fires no `mm_page_alloc`, so
+the 151 pages followed are other allocations (pipes, page tables) and
+their lives (140 ms on average) say nothing of a READ's.
+
+What it means for the next step: the cost is the pages' one-way trip
+between CPU groups, not the allocator as such, so it is removed either
+by pages that never leave a recycling pool (the region's READ partition:
+`svc_tcp_rx_region_reads`, with David's 15 patches, needs a kernel from
+the tip) or by returning a freed reply page to the CPU that will refill
+`rq_pages` (a per-connection or per-rtc-CPU recycle of reply pages,
+outside the region).  The first is tried first, on the kernel from the
+tip; the region's peak pages are reported beside its rate.
