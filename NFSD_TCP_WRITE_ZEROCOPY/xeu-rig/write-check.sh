@@ -3,9 +3,12 @@
 # change made for reads that touches a path WRITEs also take (the
 # kernel's network, SUNRPC, nfsd, block or NVMe paths, xeu, or
 # settled.sh) is checked with one two-port write run on all eight
-# drives at the settled setting.  It passes at 78.0 GB/s or more with no
-# drive stepped down and no new kernel warning; 77.8 to 77.99 is run once
-# more before it is called a regression; below 77.8 it fails.
+# drives at the settled setting.  It passes at 77.6 GB/s or more with no
+# drive stepped down and no new kernel warning; below 77.6 it is run once
+# more (RERUN), and below 77.6 twice is a regression.  Until 16 November
+# it passed at 78.0 and ran 77.8 to 77.99 again (Mike, 16 November:
+# "77.8 to 77.99 aren't worth concern, anything before 77.6 should be
+# flagged for re-run").
 #
 # It is short (Mike: it need only show that 78 GB/s is still reached):
 # WARM=3 RUNTIME=15 and a 30 s rest, against the rounds' WARM=10
@@ -37,8 +40,8 @@ hung=$(diff $O/dmesg.0 $O/dmesg.1 | grep -v 'tracing to debugfs is deprecated' |
 gbs=$(grep '^total' $O/run.log | grep -oE '[0-9]+\.[0-9]+' | head -1)
 down=$(grep -q 'no drive stepped down' $O/run.log && echo 0 || echo 1)
 v=$(awk -v g="$gbs" -v d=$down -v h=$hung 'BEGIN {
-	if (g == "" || d || h) print "FAIL"; else if (g >= 78.0) print "PASS";
-	else if (g >= 77.8) print "RERUN"; else print "FAIL" }')
+	if (g == "" || d || h) print "FAIL"; else if (g >= 77.6) print "PASS";
+	else print "RERUN" }')
 say "t2-r$n write check: $v | $(grep '^total' $O/run.log) | $([ $down = 0 ] && echo 'no drive stepped down' || echo 'a drive stepped down') | new kernel warnings $hung"
 grep -E '^  write:|^port |drives of' $O/run.log | sed 's/^/    /'
 ./settled.sh apply > $O/apply-after.txt 2>&1; say "after: $(tail -1 $O/apply-after.txt)"

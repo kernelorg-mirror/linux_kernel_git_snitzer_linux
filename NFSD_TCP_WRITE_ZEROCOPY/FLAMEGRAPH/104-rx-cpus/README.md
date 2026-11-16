@@ -1931,3 +1931,11 @@ settled setting".  The suite through `step.sh`
 them), then the server put back with `kunit` unloaded first (nfsd's
 load printed `kunit: disabled`), 512 threads, settled.  Next: the WRITE
 and READ checks, `write-check.sh 770` and `read-check.sh 771`.
+
+**WRITE: t2-r770 77.94 GB/s and t2-r772 77.97**, no drive stepped down,
+no new kernel warning; both RERUN by the 78.0 mark.  **The WRITE mark is
+77.6 from 16 November, evening (Mike: "77.8 to 77.99 aren't worth
+concern, anything before 77.6 should be flagged for re-run")**:
+`write-check.sh` passes at 77.6 or more and runs below 77.6 once more,
+below 77.6 twice being a regression; AGENTS.md says the same.  By it
+both runs PASS.  Next: `read-check.sh 771`.

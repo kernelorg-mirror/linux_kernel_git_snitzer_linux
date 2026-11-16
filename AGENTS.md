@@ -281,10 +281,13 @@ says why WRITEs cannot reach it.
   drives (`WARM=3 RUNTIME=15`, a 30 s rest; it need only show that
   78 GB/s is still reached, and round 103's 40 s runs are at full rate
   from their second second, every 15 s of them within 0.2 GB/s of the
-  whole). It passes at **78.0 GB/s or more**, no drive stepped
-  down and no new kernel warning. Run-to-run spread is about 0.2 GB/s,
-  so 77.8 to 77.99 is run once more (`RERUN`); below 77.8, or below
-  78.0 twice, is a regression.
+  whole). It passes at **77.6 GB/s or more**, no drive stepped
+  down and no new kernel warning; below 77.6 it is run once more
+  (`RERUN`), and below 77.6 twice is a regression. **Until 16 November
+  it passed at 78.0 and ran 77.8 to 77.99 again; Mike: "77.8 to 77.99
+  aren't worth concern, anything before 77.6 should be flagged for
+  re-run".** A drive that steps down or a new kernel warning still
+  fails it.
 - **A regression is not kept**, whatever the read gains: the change is
   reworked or dropped, or Mike decides. Do not move the 78 GB/s mark,
   or the pass's shape, without Mike's word.
