@@ -815,3 +815,9 @@ sunrpc from `updates/` until it is taken out
 (`SUNRPC_KO=none xeu-rig/swap-sunrpc.sh`, which drops the client's
 connections), with both parameters N, which is build 534's own
 behaviour.
+
+Taken out on 16 November (Mike): `updates/sunrpc.ko` removed and
+`SUNRPC_KO=none xeu-rig/swap-sunrpc.sh` run with no client connected;
+the running sunrpc is build 534's own (`19A83B182CB392E30E42C81`),
+`updates/` is empty, and `settled.sh apply` ends in the settled
+setting.
