@@ -30,4 +30,18 @@ struct svc_reply_tx *svc_reply_tx_take(struct svc_rqst *rqstp,
 int svc_reply_pages_init(void);
 void svc_reply_pages_exit(void);
 
+#if IS_ENABLED(CONFIG_KUNIT)
+struct svc_reply_kunit_stats {
+	unsigned long	sends;
+	unsigned long	reused;
+	unsigned long	busy;
+	unsigned long	over;
+	long		live;
+};
+
+unsigned int svc_reply_kunit_set(unsigned int pages);
+unsigned int svc_reply_kunit_cached(int cpu);
+void svc_reply_kunit_stats(struct svc_reply_kunit_stats *k);
+#endif
+
 #endif /* _NET_SUNRPC_SVC_REPLY_PAGES_H */
