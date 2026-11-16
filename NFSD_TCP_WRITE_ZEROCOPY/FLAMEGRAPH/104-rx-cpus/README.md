@@ -1594,3 +1594,77 @@ kdump and ran `crashlog.sh` (journal on disk, a line seen at the
 client's netconsole log), and `./settled.sh apply` ended in "the
 settled setting" with no NFS connection.  Next: step 2 of the order of
 work, the teardown's code.
+
+### The teardown's code and audit (16 November, evening)
+
+Three commits at the tip (`git log --oneline -3`):
+
+- `SUNRPC: Release a stopping connection's replies between two sends`
+  (code).  A live drain checked for the stop only before its batch: a
+  pass already sending went on with up to `SVC_RTC_SEND_BUDGET` (8)
+  replies, each of which may wait out the socket's 30 s send timeout,
+  while `svc_rtc_xprt_stop()` waited in `flush_work()`, and the socket
+  is shut down only by `xpo_detach()` after the stop returns.  Now the
+  drain checks before each reply and releases the rest unsent.  Neither
+  work item requeues itself on a dead connection, and the send work
+  item no longer requeues itself for `conn->done` (a completion
+  published after the pass took the list kicks a pass of its own).
+- `SUNRPC: Report an svc_rtc_unregister() wait that does not end`
+  (code).  Its wait for the active count, summed over every service,
+  had no bound and printed nothing: a leaked pin left nfsd's stop
+  asleep there with no record.  It now says every 10 s how many passes
+  and calls are still in flight.
+- `SUNRPC: test a connection that stops with replies still to send`
+  (KUnit tests): `rtc_send_stop_mid_batch` (fails on the old code: it
+  sent all 8) and `rtc_e2e_split_stop_full` (a split connection
+  stopped with 10 replies on its FIFO and a parked call completing
+  after the stop: all released dead, no budget requeue).
+
+Built with `build-sunrpc.sh` against build 534 into
+`/var/tmp/zc-run-logs/sunrpc-split3-534/`: no warning, 442 exports
+with no version changed.  `sunrpc.ko` srcversion
+`8843BD2AFB934E2FEFD942B`, `svc_rtc_kunit.ko` `3ABB9CCDC77A36AFA1CA4BE`.
+
+What the audit found against the suspects above:
+
+1. **The endless requeue (suspect 1) does not happen in the code as it
+   was**: a dead drain empties `pending` and `sendq`, and an `-EAGAIN`
+   completion is handed to a thread, not put back on `done`, so the
+   requeue check found nothing.  The change above removes the requeue
+   on a dead connection anyway.
+2. **`svc_rtc_xprt_stop()`'s order (suspect 2) is safe**: a completion
+   or held reply published after its flushes queues a pinned pass, and
+   `svc_rtc_unregister()` waits for every pin before
+   `destroy_workqueue()`.  The slow part was the live batch above.
+3. **The published hook (suspect 3) is already cleared** by a KUnit
+   action (`rtc_pub_unhook`) when a case ends early.
+4. **New, and the likeliest cause of the 19:27 hang, unconfirmed: the
+   `sunrpc-nfsd-rtc` suite is built into `nfsd.ko`**
+   (`CONFIG_NFSD_RTC_KUNIT_TEST`, `nfsd-y += nfsd_rtc_kunit.o`; `nfsd.ko`
+   has a `.kunit_test_suites` section, which is why it depends on
+   `kunit`).  Running `sunrpc_svc_rtc` needs `kunit` loaded with
+   `enable=1`, so nfsd unloaded first.  If nfsd is then loaded again
+   with that `kunit` still in place, its 26 cases run inside `modprobe
+   nfsd`, and `rtcn_flip()` creates and destroys **the real nfsd service
+   of `init_net`** (`nfsd_create_serv()`, `nfsd_destroy_serv()`) and sets
+   `nfsd_io_cache_read`, while nfs-server's start writes
+   `/proc/fs/nfsd` at the same time.  The 19:27 chain restored nfsd
+   right after `rmmod svc_rtc_kunit`; whether `kunit` was reloaded first
+   is not recorded.  From now on **`modprobe -r kunit` comes after the
+   suite and before nfsd is loaded**, so nfsd pulls in a disabled one.
+
+### The suite on the host, one step at a time (about to run)
+
+Each through `xeu-rig/step.sh /var/tmp/zc-run-logs/kunit-split3-534
+NAME ...`, the last `zc-step` line in the client's netconsole log
+naming the step if the host goes down:
+
+1. `swap`: `swap-sunrpc.sh /var/tmp/zc-run-logs/sunrpc-split3-534` (no
+   client connected), then `settled`: `settled.sh apply`.
+2. `stop-units`: the nfs units stopped; `umount-nfsd`; `rmmod-nfsd`;
+   `rmmod-kunit`; `kunit-on` (`modprobe kunit enable=1`);
+   `clear-warn-once`.
+3. `insmod-suite`: `insmod svc_rtc_kunit.ko`; `dmesg-save`.
+4. `rmmod-suite`; `kunit-off` (`modprobe -r kunit`); `params` (sunrpc's
+   settings read back); `start-nfsd` (as `swap-sunrpc.sh` starts the
+   units); `settled`.
