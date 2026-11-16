@@ -1088,3 +1088,36 @@ is the control mode.  `settled.sh` does not audit sunrpc's srcversion.
 (round 61's kernel line) so that a hard lockup panics and kdump has
 something to save, and start with one port and a few connections
 rather than the two-port read.
+
+## Next boot: build 534 with pseudo-NMI, the split on one port (Mike, 16 November)
+
+Mike: "reboot with pseudo-NMI and retry the split on one port".  The
+boot is the one-shot entry `ofp-rocky-534-pnmi.conf`: build 534's own
+entry with `irqchip.gicv3_pseudo_nmi=1` added (`bootctl set-oneshot`
+on it; build 534's default entry is unchanged, so a boot that fails
+falls back to it without pseudo-NMI).  The split `sunrpc.ko` stays in
+`updates/` and loads at boot with split N.
+
+After the boot, before any run:
+
+1. `grep gicv3_pseudo_nmi /proc/cmdline`; dmesg `GICv3: Pseudo-NMIs
+   enabled` and `NMI watchdog: Enabled`; `kernel.nmi_watchdog` 1.  If
+   the boot has no pseudo-NMI, it fell back to build 534: say so and
+   stop.
+2. The boot's checks: kdump armed (`./bringup.sh` first), both ports
+   pinged, `./settled.sh apply` ending in "the settled setting", sunrpc
+   `1907D42B9BE624B41C23DA2` with `svc_rtc_tx_split` N, dmesg with no
+   `WARNING:`, `BUG:` or `Oops`, no NFS client connected.  Commit the
+   boot's outcome here before the run.
+3. `NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/run-split1.sh 760` (it changes to `xeu-rig/` itself): it refuses a boot
+   without pseudo-NMI, the NMI watchdog, kdump or the split sunrpc, then
+   applies the settled setting, sets split Y and reads on port a only,
+   four connections (`NCONN`), eight fio jobs, 1 MiB at rsize 256 KiB,
+   `WARM=5 RUNTIME=20`; split goes back to N on exit.  It prints the
+   rate, any new kernel warning, and the audit after.
+4. If it hangs again, the NMI watchdog should panic it into kdump:
+   after the reboot read `/var/crash/*/vmcore-dmesg.txt` (its name's
+   date is the boot clock's, not the day's) and rename it once read.
+   If it passes, more connections next (`NCONN=12`), then two ports,
+   each a run of its own, and the split's rate against split N at the
+   same shape before anything is kept.

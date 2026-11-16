@@ -434,6 +434,14 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**tardis2's next boot (Mike, 16 November): build 534 with pseudo-NMI
+(the one-shot entry `ofp-rocky-534-pnmi.conf`), to retry
+`svc_rtc_tx_split` on one port after it hung the host on two (t2-r759,
+nothing saved).  Start at "Next boot: build 534 with pseudo-NMI, the
+split on one port" at the end of
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/README.md`.**  The
+split `sunrpc.ko` is in build 534's `updates/` (Mike: leave it there).
+
 **tardis2's next two boots (Mike, 15 November): build 531 with `psi=0`,
 then the kernel Mike builds on gitlab from the tip.  Start at "Next
 boot (15 November)" at the top of
