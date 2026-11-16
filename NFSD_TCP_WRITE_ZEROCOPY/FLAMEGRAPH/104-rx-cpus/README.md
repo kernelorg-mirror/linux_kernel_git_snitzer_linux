@@ -1921,3 +1921,13 @@ Next: that module swapped in with no client connected, the settled
 setting, the suite, the WRITE and READ checks, then the client's side
 of a READ measured (Mike: "measure the client side of a READ when split
 isn't being used on the server").
+
+**On the host (16 November, about 21:50):** `swap-sunrpc.sh` put
+`sunrpc.ko` `67376EA89E652240AB9F1E1` (no split) in build 534's
+`updates/` with no client connected; `settled.sh apply` ends in "the
+settled setting".  The suite through `step.sh`
+(`/var/tmp/zc-run-logs/kunit-nosplit-534/`): **`sunrpc_svc_rtc` 45 of
+45, no warning** (`rtc_send_stop_mid_batch`, `rtc_e2e_stop_full` among
+them), then the server put back with `kunit` unloaded first (nfsd's
+load printed `kunit: disabled`), 512 threads, settled.  Next: the WRITE
+and READ checks, `write-check.sh 770` and `read-check.sh 771`.
