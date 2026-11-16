@@ -966,3 +966,66 @@ connection by a hash of its transport's address, new at every run, so
 each run has its own collisions (r739: 24 connections on 21 CPUs).  The
 check records no placement; `rtc_stats`' `placed` line in it would
 test that.  The mark and what to do about the spread are Mike's.
+
+## The send work item split off (`svc_rtc_tx_split`): tardis2 hung (16 November)
+
+**The change** ([svc-rtc-tx-split.patch](svc-rtc-tx-split.patch), not
+committed to the tree): `sunrpc.svc_rtc_tx_split`, latched per
+connection at attach, gives each connection a second work item, on a
+CPU of its own on the receive CPU's node, for its completions (the
+READ's reply encoded, `svc_rtc_run_completions()`) and its send FIFO
+(`svc_rtc_drain_sends()`).  The first work item then only receives and
+submits.  The idea is that one READ costs its connection's CPU its
+receive, submit, completion and send, so a connection's calls are
+limited by one CPU doing all four.  The new fields sit in a wrapper
+private to `svc_xprt.c` (`struct svc_rtc_conn_tx`), so
+`include/linux/sunrpc/svc_xprt.h` is unchanged and the module's 442
+export versions match build 534's: nfsd and lockd load against it.
+It was built at `/var/tmp/zc-run-logs/sunrpc-split-534` with no
+warning, and `swap-sunrpc.sh` put it in build 534's `updates/` with no
+client connected (srcversion `1907D42B9BE624B41C23DA2`, split N at
+load).
+
+**The run:** t2-r759, the first of a strobe pair (rsize 256 KiB, then
+1 MiB, then the control at N), with split set on: `run645.sh` with
+`RSIZE=262144 TRIM=0 REST=10 WARM=5 RUNTIME=20 FILL_REST=3` (the rest
+of the command line, the probe included, is lost).  The settled setting
+audited clean, both ports were set up and the eight filesystems mounted
+(the last file written, `run/geometry.txt`, at 16:51:26).  Then the
+host hung: `wrote.0` is empty, so fio never reported, and the console
+showed nothing more.  tardis2 came back at 17:00:57 into build 534.
+
+**Nothing was saved.**  kdump was armed (`kexec_crash_loaded` 1,
+`crashkernel=1G`), and `softlockup_panic`, `hardlockup_panic`,
+`hung_task_panic` and `panic_on_oops` are all 1, yet `/var/crash` is
+empty, pstore is empty and the journal holds only the new boot.  An
+oops, a soft lockup or a hung task would have panicked into kdump.  But
+`nmi_watchdog` is 0: build 534's command line has no
+`irqchip.gicv3_pseudo_nmi=1`, so a CPU spinning with interrupts off is
+never detected and the host just stops.  That fits what was seen; the
+other reading is kdump failing as it did on build 506 ("KUnit crashes
+on build 506" in `TESTING.md`).  `dmesg.0`, taken before the load,
+ends with the swap's sunrpc and nfsd reload and no warning.
+
+**The suspect is the split**, not proven.  With it a connection's
+completions and sends run on another CPU while its receive runs,
+where before one work item did them in turn.  Read against the code,
+no fault stands out: `conn->pending` still has one owner (only the send
+work item drains, and `svc_rtc_xprt_stop()` flushes both work items),
+the sends still hold `xpt_mutex`, and the rqst pool and
+`svc_tcp_release_ctxt()` are per rqst and already used from nfsd
+threads beside the receive.  What is new and unread: nfsd's completion
+(`ops->complete`) running alongside the same connection's receive, and
+`svc_rtc_park()` from the send work item where the comment in
+`svc_rtc_fast()` says only the receive work item parks.
+
+**The host now:** build 534 with the split `sunrpc.ko` still in
+`updates/` (Mike: leave it), so it loads at every boot, split N, which
+is the control mode.  `settled.sh` does not audit sunrpc's srcversion.
+
+**Before split is run again:** boot with `irqchip.gicv3_pseudo_nmi=1`
+(round 61's kernel line) so that a hard lockup panics and kdump has
+something to save, and start with one port and a few connections
+rather than the two-port read.  Runs t2-r754 to r758 (16:10 to 16:27,
+before this one) are in `/var/tmp/zc-run-logs` and not yet written up
+here.

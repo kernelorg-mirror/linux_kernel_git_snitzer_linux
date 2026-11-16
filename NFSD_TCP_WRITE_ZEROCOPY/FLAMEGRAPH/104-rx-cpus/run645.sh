@@ -39,7 +39,8 @@ for run in ${RUNS:-647:read}; do
 	client_free || { say "client not free"; exit 1; }
 	./settled.sh apply > $O/apply.txt 2>&1 || { say "not settled: $(grep -E 'BAD|FAILED' $O/apply.txt | head -3)"; exit 1; }
 	ping -c1 -W2 192.168.1.106 > /dev/null && ping -c1 -W2 192.168.0.106 > /dev/null || { say "a port does not answer"; exit 1; }
-	sync; for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep 120
+	# quick strobes: TRIM=0 skips the trim, REST, WARM and RUNTIME shorten the run
+	sync; [ "${TRIM:-1}" = 0 ] || for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep ${REST:-120}
 	dmesg > $O/dmesg.0
 	# In the load, not before it: twoport.sh places its flows with a write
 	# job first, and its samplers write wire-sec.tsv one row a second from
@@ -87,6 +88,12 @@ for run in ${RUNS:-647:read}; do
 			awk '{n++; r += $1; q += $2; if ($1 > rm) rm = $1; if ($2 > qm) qm = $2}
 			END {printf "ss: %d connection samples; Recv-Q mean %d max %d bytes; Send-Q mean %d max %d bytes\n", n, r / n, rm, q / n, qm}' > $O/ss.txt
 		bpftrace -q /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/rtcread.bt > $O/rtcread.txt 2>&1
+	  elif [ "${PROBE:-perf}" = rtcpass ]; then
+		# One rtc pass's parts and the kicked pass's wait (rtcpass.bt),
+		# with the server's call queues sampled beside it.
+		for i in $(seq 10); do ss -tnH state established '( sport = :2049 )'; sleep 0.2; done |
+			awk '{r += $1; n++; if ($1 > rm) rm = $1} END {printf "server Recv-Q: %d samples, mean %d max %d bytes\n", n, r / n, rm}' > $O/ss.txt
+		bpftrace -q /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/rtcpass.bt > $O/rtcpass.txt 2>&1
 	  elif [ "${PROBE:-perf}" = nfsd ]; then
 		# nfsd's and the rtc work's CPUs, 8-55 (t2-r716 on), with call
 		# graphs for 8 s: where skb_tx_defer_max 128's frees land.
@@ -97,7 +104,7 @@ for run in ${RUNS:-647:read}; do
 	  snap $O 1
 	  echo "profile $(cat $O/time.0) to $(cat $O/time.1), load from $(awk 'NR == 2 {print $2}' $W)" > $O/when.txt ) &
 	env FS_A="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" FS_B="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" \
-		WARM=10 RUNTIME=40 RW=$rw RWTSV=$O/rw.tsv TAG=8d-ab-$rw-rxcpu \
+		WARM=${WARM:-10} RUNTIME=${RUNTIME:-40} RW=$rw BS=${BS:-1M} RWTSV=$O/rw.tsv TAG=8d-ab-$rw-rxcpu \
 		WRITES=$TWO_WRITES BUDGET_PAGES=8198 ./twoport.sh $O/run ab > $O/run.log 2>&1 ||
 		{ say "run failed: $(grep -E 'BAD|FAILED|no answer|not free' $O/run.log | head -3)"; wait; exit 1; }
 	wait

@@ -1,0 +1,73 @@
+/*
+ * rtcpass.bt: what one pass of a connection's rtc work item spends its
+ * time on, and how long a kicked pass waits to run (round 104: why the
+ * server's sockets hold 30 to 50 READ calls a connection unread).
+ *
+ *   wait_us    the first svc_rtc_queue_pinned() kick to the pass starting
+ *   pass_us    svc_rtc_work, whole
+ *   recv_us    svc_xprt_recv_call (the call read from the socket)
+ *   proc_us    svc_process (decode, file lookup, the READ submitted)
+ *   send_us    svc_rtc_drain_sends (the sends under xpt_mutex)
+ *   rest       pass - recv - proc - send: the completions (inlined)
+ *              and the pass's own overhead
+ * Per CPU: the share of the 8 s the CPU spent in passes, and the
+ * connections (work items) that ran there.
+ */
+/* a kick: the first since the last pass started (conn == its work item) */
+fentry:sunrpc:svc_rtc_queue_pinned
+{
+	if (!@q[(uint64)args.conn]) { @q[(uint64)args.conn] = nsecs; }
+}
+
+fentry:sunrpc:svc_rtc_work
+{
+	@p0[tid] = nsecs;
+	$t = @q[(uint64)args.work];
+	if ($t) {
+		@wait_us = stats((uint64)(nsecs - $t) / 1000);
+		@wait_hist = hist((uint64)(nsecs - $t) / 1000);
+		delete(@q[(uint64)args.work]);
+	}
+	@rv[tid] = 0; @pr[tid] = 0; @sd[tid] = 0;
+	@conns[cpu, (uint64)args.work] = count();
+}
+
+fentry:sunrpc:svc_xprt_recv_call /@p0[tid]/ { @r0[tid] = nsecs; }
+fexit:sunrpc:svc_xprt_recv_call /@r0[tid]/
+{
+	@rv[tid] += nsecs - @r0[tid]; delete(@r0[tid]);
+	@calls = count();
+}
+fentry:sunrpc:svc_process /@p0[tid]/ { @c0[tid] = nsecs; }
+fexit:sunrpc:svc_process /@c0[tid]/ { @pr[tid] += nsecs - @c0[tid]; delete(@c0[tid]); }
+fentry:sunrpc:svc_rtc_drain_sends /@p0[tid]/ { @s0[tid] = nsecs; }
+fexit:sunrpc:svc_rtc_drain_sends /@s0[tid]/
+{
+	@sd[tid] += nsecs - @s0[tid]; delete(@s0[tid]);
+	@sends_a_pass = stats(retval);
+}
+
+fexit:sunrpc:svc_rtc_work /@p0[tid]/
+{
+	$d = (uint64)(nsecs - @p0[tid]);
+	@pass_us = stats($d / 1000);
+	@pass_hist = hist($d / 1000);
+	@recv_us = stats((uint64)@rv[tid] / 1000);
+	@proc_us = stats((uint64)@pr[tid] / 1000);
+	@send_us = stats((uint64)@sd[tid] / 1000);
+	@rest_us = stats((uint64)($d - @rv[tid] - @pr[tid] - @sd[tid]) / 1000);
+	@busy_ns[cpu] = sum($d);
+	if (@rv[tid] == 0) { @passes_no_recv = count(); }
+	delete(@p0[tid]); delete(@rv[tid]); delete(@pr[tid]); delete(@sd[tid]);
+}
+
+interval:s:8
+{
+	exit();
+}
+
+END
+{
+	clear(@q); clear(@p0); clear(@rv); clear(@pr); clear(@sd);
+	clear(@r0); clear(@c0); clear(@s0);
+}
