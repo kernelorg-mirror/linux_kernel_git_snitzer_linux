@@ -2214,3 +2214,46 @@ the tip) or by returning a freed reply page to the CPU that will refill
 `rq_pages` (a per-connection or per-rtc-CPU recycle of reply pages,
 outside the region).  The first is tried first, on the kernel from the
 tip; the region's peak pages are reported beside its rate.
+
+## Next boot: the kernel from the tip, READ confinement again
+
+Mike pushed the tip with David's 15 patches and the reply-page trace
+(`5e4fd2394b611` and after) on 16 November and builds a kernel from it on
+gitlab.  `rx_loan`, `page_pool` and `tcp_output.c` are built in, so only
+a kernel tests the set.  The kernel carries the rtc commits `settled.sh`
+audits sunrpc for, and nothing from build 534's `updates/` loads into it.
+Each step through `xeu-rig/step.sh` (`/var/tmp/zc-run-logs/tip-boot/`),
+one command a step; commit what is about to run before running it.
+
+1. **The boot's checks:** `bringup.sh` (kdump armed first, then
+   `crashlog.sh`), both ports pinged, `settled.sh apply` ending in "the
+   settled setting", the eight data drives mounted, the outcome
+   committed.  No KUnit, no reload of `xeu`.
+   `/sys/module/sunrpc/parameters/svc_tcp_rx_region_reads` and
+   `/sys/module/page_pool/parameters/rx_region_held_mark` must exist; if
+   the boot fell back to build 534, say so and stop.
+2. **The passes at the settled setting, `region_reads` N:**
+   `xeu-rig/write-check.sh 781` and `xeu-rig/read-check.sh 782`.
+   David's patches change paths WRITEs take (0011's fallback to a system
+   page, 0013 and 0014's hold), so the WRITE pass decides whether the
+   kernel is kept at all, whatever confinement does.
+3. **The A/B**, one pair a step, alternating:
+   `./ab-reads.sh 783:N`, `784:Y`, `785:N`, `786:Y`.  Each is a
+   `read-check.sh` with the parameter set before the mounts and the
+   region's held mark on, and prints the rate, the region's exact peak
+   (`max_held`), and the READ counters (admitted, parked, unconfined,
+   short, `share_stalls`) of both the connection's budget and the read
+   pool.  What decides it: Y at 71.5 or more, beside N on the same boot,
+   with the region's peak no higher than N's (the rule not to grow it;
+   t2-r665 and r667 nearly tripled it), and `share_stalls` against
+   READs admitted, where 0009's two largest READs a connection limited
+   r665 and r667.
+4. **If Y is kept:** `write-check.sh 787` with Y, and
+   `SRV=replypages client-read.sh 788` with Y beside t2-r780: the
+   rtc CPUs' 8.06 M pages taken under the zone lock in 5 s should be
+   gone.
+5. Then whatever Y shows: if the share stalls, the share's size
+   (`svc_tcp_rx_region_conn_share`) is Mike's to decide (he set it aside
+   on 16 November as "excessive use of the region"); if confinement
+   loses on its own, the other way to stop the pages' one-way trip is a
+   recycle of reply pages to the rtc CPUs outside the region.
