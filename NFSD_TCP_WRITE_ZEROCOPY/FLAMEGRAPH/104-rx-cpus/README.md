@@ -2339,3 +2339,46 @@ the WRITE pass r785 do not run.  Then [prof-recycle.sh](prof-recycle.sh)
 `786 512`: `read-prof.sh` (r779's strobe and profile, its baseline: 534's
 own sunrpc) with the recycle at 512, its counters and `rtc_stats` either
 side of the window.
+
+### t2-r783 and the profile, t2-r787: the sends wait below TCP
+
+`t2-r783` (0): 70.27 GB/s, under the mark, no new kernel warning, the
+recycle's counters unmoved over it.  (A first try at the profile,
+`t2-r786`, started at 23:30:11 while r783 ran: its wait matched the
+`r784: done` line of the A/B's first start.  It set the recycle to 512
+for 4 s and audited the setting, found NFS connections and stopped;
+r783's counters show no reply sent under the recycle, so its load had
+ended.)  The A/B stopped at the file before r784.
+
+[prof-recycle.sh](prof-recycle.sh) `787 512`: 62.20 GB/s, against r779's
+71.34 (534's own sunrpc, the same strobe and profile).  In the window:
+
+| | r779 | r787, recycle 512 |
+|---|---|---|
+| `fallback_conn_full` | 0 | 73,610 |
+| `budget_exhausted` | 55 | 65,212 |
+| replies a send batch | 1.56 | 2.50 |
+| rtc CPUs' samples: zone lock spin (`queued_spin_lock_slowpath`) | 8.98% | 1.29% |
+| rtc CPUs' samples: `svc_fill_pages` with children | 11.04% | 4.06% |
+| rtc CPUs' samples: idle (`cpu_do_idle`) | 1.21% | 5.86% |
+| server socket Send-Q, mean | 0.48 MB | 2.47 MB (of 4 MiB) |
+| bytes below TCP, not yet freed (`skmem` t), samples | 0 to 0.14 MB | 2.5 to 3.7 MB |
+| TCP's RTT, server side | 0.18 ms | 0.99 ms |
+| client's READ RTT, mean | 5.10 ms | 7.48 ms |
+
+The recycle removed what it was written to remove (the zone lock, most of
+the fill), and the rtc CPUs went idle, but each socket's sent skbs
+stay counted against it below TCP: TCP's small queues stop the socket at
+`tcp_limit_output_bytes`, its send queue fills the 4 MiB buffer, and
+`sendmsg()` sleeps on the work item.  Replies pile up behind it, its
+connection fills and calls go to threads.  Spliced skbs (r779) were let
+go at once.
+
+**The probe**, [wfree.bt](wfree.bt), by
+[probe-recycle.sh](probe-recycle.sh) `788 512 wfree` then `789 0 wfree`
+(the quick strobe, `client-read.sh`, with the probe in its window): for
+one transmitted skb of 1000 bytes or more in eight, whether it is zero
+copy and whether its destructor is `tcp_wfree` at
+`net_dev_start_xmit`, how long until `tcp_wfree()` and from where; and
+every `skb_copy_ubufs()` with its caller.  If `xeu` lets a plain skb go
+at transmit and a zero-copy one only at its completion, it shows here.

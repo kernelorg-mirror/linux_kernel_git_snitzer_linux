@@ -1,0 +1,42 @@
+/*
+ * wfree.bt: when a sent TCP skb stops counting against its socket (round
+ * 104, 16 November: with svc_tcp_reply_recycle at 512, t2-r787's server
+ * sockets held 2.5 to 3.7 MB below TCP, against nothing in r779).  For one
+ * transmitted skb of 1000 bytes or more in eight (by address), at
+ * net_dev_start_xmit: whether it is zero copy (SKBFL_ZEROCOPY_ENABLE in its
+ * shared info) and whether its destructor is tcp_wfree; then how long until
+ * tcp_wfree() runs for it, by zero copy or not, and where tcp_wfree() is
+ * called from.  And every skb_copy_ubufs(): TCP copying zero-copy data, with
+ * its caller.  5 s.
+ */
+tracepoint:net:net_dev_start_xmit /args.len >= 1000 && (((uint64)args.skbaddr >> 8) & 7) == 0/
+{
+	$skb = (struct sk_buff *)args.skbaddr;
+	$sh = (struct skb_shared_info *)($skb->head + $skb->end);
+	$zc = ($sh->flags & 1) ? "zerocopy" : "plain";
+	@xmit[$zc, $skb->destructor == (void *)kaddr("tcp_wfree") ? "tcp_wfree" : "other destructor"] = count();
+	@t[(uint64)args.skbaddr] = nsecs;
+	@z[(uint64)args.skbaddr] = $sh->flags & 1;
+}
+
+kprobe:tcp_wfree /@t[arg0]/
+{
+	$zc = @z[arg0] ? "zerocopy" : "plain";
+	@wfree_us[$zc] = hist((uint64)(nsecs - @t[arg0]) / 1000);
+	@wfree_us_stats[$zc] = stats((uint64)(nsecs - @t[arg0]) / 1000);
+	@wfree_from[$zc, kstack(8)] = count();
+	delete(@t[arg0]);
+	delete(@z[arg0]);
+}
+
+kprobe:skb_copy_ubufs
+{
+	@copy_ubufs[kstack(8)] = count();
+}
+
+interval:s:5
+{
+	clear(@t);
+	clear(@z);
+	exit();
+}
