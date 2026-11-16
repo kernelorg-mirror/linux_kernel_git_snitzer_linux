@@ -1939,3 +1939,20 @@ concern, anything before 77.6 should be flagged for re-run")**:
 `write-check.sh` passes at 77.6 or more and runs below 77.6 once more,
 below 77.6 twice being a regression; AGENTS.md says the same.  By it
 both runs PASS.  Next: `read-check.sh 771`.
+
+## The client's side of a READ (Mike, 16 November: "focus on how to optimize the client side while running settled settings on the server (without split)")
+
+Quick strobes, not checks (Mike: "read strobe should be quick"):
+[client-read.sh](client-read.sh) runs the two-port read at the settled
+server setting with no trim, `REST=30`, `WARM=5 RUNTIME=25` (fio 1 MiB,
+rsize 256 KiB, eight drives); `twoport.sh`'s client knobs pass through
+(`NCONN`, `JOBS`, `IODEPTH`, `PIN`, `CLI_SCOPE`, `CLI_STRICT`,
+`QDISC`) and are put back after.  In the window it reads the client's
+`/proc/self/mountstats` either side (each READ's queue, round trip and
+execute time; each transport's slots in flight, backlog and pending),
+1 s of `sunrpc:rpc_stats_latency` (their spread), the client's CPUs
+(mpstat, a 5 s profile) and ten `ss` samples at both ends;
+[client-read.py](client-read.py) writes `summary-client.txt`.  The
+client is the shared 2 x 24-core Xeon 6542Y, port a's NIC
+(`ens3np0`, mlx5, 48 channels) on node 0 and port b's on node 1.
+First the baseline as settled, then one client change at a time.
