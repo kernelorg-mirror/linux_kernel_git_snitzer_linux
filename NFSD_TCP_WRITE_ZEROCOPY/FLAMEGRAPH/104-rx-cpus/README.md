@@ -1956,3 +1956,9 @@ execute time; each transport's slots in flight, backlog and pending),
 client is the shared 2 x 24-core Xeon 6542Y, port a's NIC
 (`ens3np0`, mlx5, 48 channels) on node 0 and port b's on node 1.
 First the baseline as settled, then one client change at a time.
+
+**READ check on the module without the split: t2-r771 PASS, 74.61
+GB/s**, no new kernel warning (the highest read check yet; r737 73.47).
+With r770 and r772's WRITE passes, `sunrpc.ko`
+`67376EA89E652240AB9F1E1` is kept.  Next: `client-read.sh 773`, the
+client as settled.
