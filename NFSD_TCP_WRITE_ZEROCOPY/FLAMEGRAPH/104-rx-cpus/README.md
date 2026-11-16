@@ -1385,3 +1385,12 @@ and rings (log `/var/tmp/zc-run-logs/bringup-534-pnmi-boot4.log`), and
 connection.  Next, as planned: the fixed module
 (`sunrpc-split2-534`) swapped in and the `sunrpc_svc_rtc` suite on its
 own, then `run-split1.sh` at four and twelve connections.
+
+The fixed module is in: `swap-sunrpc.sh
+/var/tmp/zc-run-logs/sunrpc-split2-534` with no client connected put
+`sunrpc.ko` srcversion `C3403E1043259A7524692BC` in build 534's
+`updates/` (nfsd `0E473D4AA58E3F70608609A` reloaded against it,
+`svc_rtc_tx_split` N), and `settled.sh apply` ended in "the settled
+setting".  **About to load `svc_rtc_kunit.ko` from that build on its
+own** (`sunrpc_svc_rtc`, with the five split cases); if the host goes
+down, this is the last thing that was run.
