@@ -384,6 +384,12 @@ RTC_BALANCE_SETTLED=$RTC_BALANCE
 # that last sent on it (FLAMEGRAPH round 104: the READ pages' frees on
 # the CPU that allocated them).
 RFS=${EXP_RFS:-0}
+# EXP_RPS=<cpulist> holds a run (and apply) to plain RPS, no flow table:
+# every receive queue's rps_cpus at those CPUs, so the ring CPUs keep the
+# driver's poll and GRO and hand TCP's receive (for READs, the client's
+# ACKs and the frees of what they acknowledge) to those CPUs by flow hash
+# (FLAMEGRAPH round 104).  Give svc_rtc_cpus CPUs outside it.
+RPS_CPUS=${EXP_RPS:-}
 # net.core.skb_tx_defer_max ("net: add skb_attempt_defer_free_tx()" and
 # "tcp: free acknowledged skbs on the cpu that built them", ddb07c31c1b39
 # and 7bd353fb130ef; FLAMEGRAPH round 104): 0, an acknowledged skb freed
@@ -583,6 +589,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "$RTC_CPUS" != "$RTC_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_cpus=${RTC_CPUS:-none}"
 	[ "$RTC_BALANCE" != "$RTC_BALANCE_SETTLED" ] && OFF="$OFF svc_rtc_balance=$RTC_BALANCE"
 	[ "$RFS" != 0 ] && OFF="$OFF rfs=$RFS"
+	[ -n "$RPS_CPUS" ] && OFF="$OFF rps=$RPS_CPUS"
 	[ "$TX_DEFER" != 0 ] && OFF="$OFF skb_tx_defer_max=$TX_DEFER"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
 	[ "${EXP_NOTRACK:-}" = absent ] && OFF="$OFF zc_notrack=absent"
@@ -729,7 +736,9 @@ audit_port() {	# audit_port <a|b>
 	# client, so nothing measured changed, but the setting is off).
 	want "$d pause rx/tx" "$(ethtool -a $d | awk '/^RX:/ {r = $2} /^TX:/ {t = $2} END {print r "/" t}')" off/off
 	for q in /sys/class/net/$d/queues/rx-*; do
-		if [ "$RFS" = 0 ]; then
+		if [ -n "$RPS_CPUS" ]; then
+			want "$d $(basename $q) RPS" "$(cat $q/rps_cpus)" "$(rps_mask $RPS_CPUS)"
+		elif [ "$RFS" = 0 ]; then
 			want "$d $(basename $q) RPS" "$(xps_cpu $q/rps_cpus)" none
 		else
 			want "$d $(basename $q) RPS" "$(cat $q/rps_cpus)" "$(rps_mask $NFSD_CPUSET)"
@@ -867,7 +876,8 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 			echo 0 > $q/xps_rxqs
 		done
 		for q in /sys/class/net/$d/queues/rx-*; do
-			if [ "$RFS" = 0 ]; then echo 0 > $q/rps_cpus; else rps_mask $NFSD_CPUSET > $q/rps_cpus; fi
+			if [ -n "$RPS_CPUS" ]; then rps_mask $RPS_CPUS > $q/rps_cpus
+			elif [ "$RFS" = 0 ]; then echo 0 > $q/rps_cpus; else rps_mask $NFSD_CPUSET > $q/rps_cpus; fi
 			echo $(( RFS / 8 )) > $q/rps_flow_cnt
 		done
 		echo $RFS > /proc/sys/net/core/rps_sock_flow_entries
