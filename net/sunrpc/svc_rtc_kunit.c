@@ -592,6 +592,45 @@ static void rtc_send_after_stop_released(struct kunit *test)
 	rtc_fixture_done(test, f);
 }
 
+/* Sends reply @send, then the connection starts to stop. */
+static void rtc_test_send_stop_fn(struct svc_xprt *xprt,
+				  struct svc_rtc_send *send, bool dead)
+{
+	rtc_test_send_fn(xprt, send, dead);
+	set_bit(SVC_RTC_STOPPING, &xprt->xpt_rtc->flags);
+}
+
+/*
+ * A connection that starts to stop in the middle of a live batch has
+ * the rest of its replies released unsent, without xpt_mutex, in order:
+ * svc_rtc_xprt_stop() waits for the batch, and each send may wait out
+ * the socket's send timeout.
+ */
+static void rtc_send_stop_mid_batch(struct kunit *test)
+{
+	struct rtc_fixture *f = rtc_fixture_new(test, true);
+	struct rtc_send_set *set = kunit_kzalloc(test, sizeof(*set), GFP_KERNEL);
+	struct svc_rtc_conn *conn;
+	int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, set);
+	conn = f->xprt.xpt_rtc;
+	rtc_send_set_init(set);
+	set->sends[1].send.fn = rtc_test_send_stop_fn;
+	for (i = 0; i < RTC_NSENDS; i++)
+		llist_add(&set->sends[i].send.node, &conn->sendq);
+	KUNIT_EXPECT_EQ(test, svc_rtc_drain_sends(conn, false), RTC_NSENDS);
+	KUNIT_EXPECT_NULL(test, conn->pending);
+	KUNIT_EXPECT_EQ(test, set->nlog, RTC_NSENDS);
+	for (i = 0; i < RTC_NSENDS; i++) {
+		KUNIT_EXPECT_EQ(test, set->log[i], i);
+		KUNIT_EXPECT_EQ(test, set->dead[i], i >= 2);
+		KUNIT_EXPECT_EQ(test, set->locked[i], i < 2);
+	}
+	KUNIT_EXPECT_FALSE(test, mutex_is_locked(&f->xprt.xpt_mutex));
+	rtc_fixture_done(test, f);
+}
+
 /*
  * TCP flat combining (svcsock.c), run without a socket: the
  * svc_tcp_kunit_hooks send hook logs each record sent on the test's own
@@ -2350,6 +2389,50 @@ static void rtc_e2e_split_complete_race(struct kunit *test)
 	__rtc_e2e_complete_race(test, true);
 }
 
+/*
+ * Split: a connection stops with more than a batch of replies on its
+ * FIFO and a call parked on I/O that completes after the stop.  Every
+ * reply is released unsent, the completed call's too, and neither work
+ * item queues itself again once the connection is dead.
+ */
+static void rtc_e2e_split_stop_full(struct kunit *test)
+{
+	struct rtc_e2e *e = rtc_e2e_split_new(test, true);
+	struct rtc_send_set *set = kunit_kzalloc(test, sizeof(*set), GFP_KERNEL);
+	struct svc_rtc_stats a, b, c, d;
+	int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, set);
+	e->mode = RTC_M_ASYNC;
+	rtc_e2e_kick(e, &a, &b);
+	KUNIT_ASSERT_NOT_NULL(test, e->pending);
+	rtc_send_set_init(set);
+	for (i = 0; i < RTC_NSENDS; i++)
+		llist_add(&set->sends[i].send.node, &e->xprt.xpt_rtc->sendq);
+
+	svc_rtc_stats_sum(&c);
+	set_bit(XPT_DEAD, &e->xprt.xpt_flags);
+	svc_rtc_xprt_stop(&e->xprt);
+	KUNIT_EXPECT_EQ(test, set->nlog, RTC_NSENDS);
+	svc_rtc_complete(e->pending);
+	drain_workqueue(e->serv->sv_rtc_wq);
+	svc_rtc_stats_sum(&d);
+
+	for (i = 0; i < RTC_NSENDS; i++) {
+		KUNIT_EXPECT_EQ(test, set->log[i], i);
+		KUNIT_EXPECT_TRUE(test, set->dead[i]);
+		KUNIT_EXPECT_FALSE(test, set->locked[i]);
+	}
+	KUNIT_EXPECT_EQ(test, e->completes, 1);
+	KUNIT_EXPECT_EQ(test, e->reply_len[1], 0);
+	KUNIT_EXPECT_EQ(test, d.fast_completed - a.fast_completed, 0);
+	KUNIT_EXPECT_EQ(test, d.budget_exhausted - c.budget_exhausted, 0);
+	KUNIT_EXPECT_NULL(test, e->xprt.xpt_rtc->pending);
+	KUNIT_EXPECT_TRUE(test, llist_empty(&e->xprt.xpt_rtc->sendq));
+	KUNIT_EXPECT_TRUE(test, llist_empty(&e->xprt.xpt_rtc->done));
+	rtc_e2e_done(test, e);
+}
+
 static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_no_work_item_no_divert),
 	KUNIT_CASE(rtc_no_hook),
@@ -2362,6 +2445,7 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_send_refill_past_budget_rekicks),
 	KUNIT_CASE(rtc_stop_releases_sends),
 	KUNIT_CASE(rtc_send_after_stop_released),
+	KUNIT_CASE(rtc_send_stop_mid_batch),
 	KUNIT_CASE(rtc_tcp_combine_fifo),
 	KUNIT_CASE(rtc_tcp_rtc_release_hands_off),
 	KUNIT_CASE(rtc_register_once),
@@ -2398,6 +2482,7 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_e2e_split_early_complete),
 	KUNIT_CASE(rtc_e2e_split_async_complete),
 	KUNIT_CASE(rtc_e2e_split_teardown_inflight),
+	KUNIT_CASE(rtc_e2e_split_stop_full),
 	KUNIT_CASE_SLOW(rtc_e2e_split_complete_race),
 	{}
 };
