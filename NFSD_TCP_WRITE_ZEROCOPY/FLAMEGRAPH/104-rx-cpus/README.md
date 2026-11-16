@@ -1365,3 +1365,23 @@ it is safe as it is).
 3. Then `run-split1.sh` at four connections and at twelve again, with
    the serial console logged, and the WRITE and READ checks if the
    split is to be kept.
+
+### The boot after the power reset (16 November, 19:19): both ports
+
+The boot is the one meant: `irqchip.gicv3_pseudo_nmi=1` on the
+command line, `GICv3: Pseudo-NMIs enabled`, `NMI watchdog: Enabled`,
+`kernel.nmi_watchdog`, `hardlockup_panic` and `softlockup_panic` 1,
+kdump armed, the split sunrpc `1907D42B9BE624B41C23DA2` with
+`svc_rtc_tx_split` N, no `WARNING:`, `BUG:` or `Oops` in dmesg.
+**Both ports answered 3 of 3 before `bringup.sh`** and again after it.
+
+The client still held t2-r761's four port a mounts, its eight fio
+jobs in D state (`exit_aio`) and the bash waiting in its `rm -f`
+(`rpc_wait_bit_killable`).  `umount -f` on each mount released them,
+and a plain `umount` then took the mounts off: no NFS mount, no fio,
+nothing in D state.  `./bringup.sh 32768 256` set up both ports' region
+and rings (log `/var/tmp/zc-run-logs/bringup-534-pnmi-boot4.log`), and
+`./settled.sh apply` ended in "the settled setting" with no NFS
+connection.  Next, as planned: the fixed module
+(`sunrpc-split2-534`) swapped in and the `sunrpc_svc_rtc` suite on its
+own, then `run-split1.sh` at four and twelve connections.
