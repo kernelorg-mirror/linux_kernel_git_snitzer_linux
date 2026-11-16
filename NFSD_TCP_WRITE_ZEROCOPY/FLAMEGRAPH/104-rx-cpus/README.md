@@ -1770,3 +1770,19 @@ with `kunit` enabled (above).  For Mike to decide:
 
 **About to run the WRITE and READ checks on this module (split N, the
 settled setting): `write-check.sh 765`, then `read-check.sh 766`.**
+
+**The checks on `8843BD2AFB934E2FEFD942B` (split N, the settled
+setting):**
+
+- **WRITE, t2-r765: PASS, 78.15 GB/s**, no drive stepped down, no new
+  kernel warning.
+- **READ, t2-r766: FAIL, 71.52 GB/s**, no new kernel warning, each
+  drive reading 8.8 to 8.9 GB/s at up to 100% busy; `settled.sh audit
+  rest` clean after.  By the rule (below 72.5) a regression, and the
+  module is not to be kept unless Mike decides.  Against it: build
+  534's own sunrpc failed the same check twice today at the same
+  setting (r746 72.25, r747 69.82; r737's 73.47 the only pass), so
+  71.52 is inside the spread the setting already showed, and the
+  change touches only how a stopping connection's replies are released
+  and when a work item requeues itself.  The module stays in
+  `updates/` until Mike says; the mark is not moved.
