@@ -453,7 +453,7 @@ if [ "$RW" != write ]; then	# a run that reads: every file written whole first, 
 	for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' | clput /tmp/twoport-fill-$p.fio; done
 	for p in $PORTS; do cl "fio /tmp/twoport-fill-$p.fio > /tmp/twoport-fill-$p.out 2>&1" & done; wait
 	echo "files written before the run: $(cl "du -sch /mnt/rxr-*/f-* | tail -1")" | tee -a geometry.txt
-	sleep 20
+	sleep ${FILL_REST:-20}	# FILL_REST: the rest after the fill (3 for a quick strobe)
 fi
 # After the ports are placed: settled.sh place pins nfsd to its settled CPUs.
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
