@@ -174,3 +174,33 @@ acknowledged, against one budget for the service (the cache's 32 MiB,
 less what the receive side holds), with a connection's share of it so
 that no connection starves.  The per-connection bound counts only what
 is queued and so cannot see the promises.
+
+**What waits for the NIC (from each run's `ss` samples, a socket):**
+the cache needs to hold a reply only until the NIC reads it, at
+transmit; bytes sent and waiting for their ACK are cold.
+
+| run | Send-Q | of it not sent | sent, unacked (the rest) | below TCP | waiting for the NIC, all sockets |
+|---|---|---|---|---|---|
+| t2-r841, settled | 0.56 MB | 0.11 MB | 0.45 MB | 0.09 MB | ~5 MB (24) |
+| t2-r843, 512 KiB, nc 16 | 1.69 | 1.47 | 0.22 | 0.25 | ~55 MB (32) |
+| t2-r844, 256 KiB, nc 16 | 1.36 | 1.21 | 0.15 | 0.23 | ~46 MB |
+| t2-r845, 128 KiB, nc 16 | 1.44 | 1.33 | 0.11 | 0.23 | ~50 MB |
+| t2-r846, 512 KiB, nc 12 | 1.42 | 1.29 | 0.13 | 0.22 | ~36 MB (24) |
+
+The settled setting keeps about 5 MB waiting for the NIC; the pending
+base 36 to 55.  Its Send-Q is nearly all unsent, while the pipe is not
+full (unacked 0.11 to 0.22 MB, under the 0.5 MB of a 2 GB/s socket at
+0.25 ms), and below TCP sits at the base's `tcp_limit_output_bytes`
+256 KiB: TCP small queues holds each socket's transmit to the pace of
+the NIC's transmit completions, and the replies wait in TCP, written by
+the drive and not yet read by the NIC.  That is what fills the cache,
+and likely why a socket carries 2.0 GB/s on the base against 2.87
+settled.
+
+**The change, from this:** a connection counts the reply bytes of its
+parked READs (the calls on async I/O, `conn->parked`, up to
+`SVC_RTC_CONN_PARKED` 32) with its queue against the bound, so that it
+admits no READ whose data would only wait in TCP: the backlog stays as
+unread calls in the socket, which hold no pages.  Then the base's
+`tcp_limit_output_bytes` 256 KiB is A/B'd again (against 1 MiB), since
+the backlog it makes in TCP is the one the cache sees.
