@@ -315,6 +315,21 @@ settled setting that day. Its first run was t2-r737, 73.47 GB/s
 without Mike's word. A round's README records its read pass beside
 its WRITE pass.
 
+## Every READ figure is framed against fio and iperf3 (hard rule)
+
+**Mike, 17 November: "we need to keep framing our progress in contrast
+to what worked with fio and iperf3".**  Round 104's contrast runs
+(`FLAMEGRAPH/104-rx-cpus/README.md`, "What works, beside NFS") are the
+measure: the drives read 104.58 GB/s with local fio, the ports send
+98.31 with iperf3 `-Z`, memory carries about 140 GB/s with both
+directions mixed, and NFS at the settled setting reads 73 at 116.5
+GB/s of memory, 1.60 bytes a byte sent.  Every READ round's README
+and report sets its runs in that table (drives, wire, DMA, memory,
+memory a byte sent, cache fills, below TCP and Send-Q a socket),
+beside those rows: the frame is in
+`FLAMEGRAPH/106-pending-base/README.md`, "The frame".  A rate alone is
+not a result.
+
 ## NFSD TCP write-path zero-copy (page-loan series)
 
 The server-side page-loan work — eliminating the redundant receive-side data
