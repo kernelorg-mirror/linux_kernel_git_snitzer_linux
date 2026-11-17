@@ -39,7 +39,6 @@
 #include <linux/sunrpc/svc.h>
 #include <net/rx_loan.h>
 #include <linux/delay.h>
-#include <kunit/visibility.h>
 
 #include "svc_reply_pages.h"
 
@@ -543,46 +542,3 @@ void svc_reply_pages_exit(void)
 	shrinker_free(svc_reply_shrinker);
 	svc_reply_trim_all();
 }
-
-#if IS_ENABLED(CONFIG_KUNIT)
-EXPORT_SYMBOL_IF_KUNIT(svc_reply_pages_fill);
-EXPORT_SYMBOL_IF_KUNIT(svc_reply_tx_take);
-
-/* Set svc_tcp_reply_recycle as its parameter would; return the old value. */
-unsigned int svc_reply_kunit_set(unsigned int pages)
-{
-	unsigned int old = READ_ONCE(svc_reply_recycle);
-
-	WRITE_ONCE(svc_reply_recycle, pages);
-	if (!pages)
-		svc_reply_trim_all();
-	return old;
-}
-EXPORT_SYMBOL_IF_KUNIT(svc_reply_kunit_set);
-
-/* Pages @cpu's cache holds. */
-unsigned int svc_reply_kunit_cached(int cpu)
-{
-	return atomic_read(&per_cpu_ptr(&svc_reply_cache, cpu)->pages);
-}
-EXPORT_SYMBOL_IF_KUNIT(svc_reply_kunit_cached);
-
-/* The counters, summed over the CPUs. */
-void svc_reply_kunit_stats(struct svc_reply_kunit_stats *k)
-{
-	int cpu;
-
-	memset(k, 0, sizeof(*k));
-	for_each_possible_cpu(cpu) {
-		const struct svc_reply_stats *p =
-			per_cpu_ptr(&svc_reply_stats, cpu);
-
-		k->sends += READ_ONCE(p->sends);
-		k->reused += READ_ONCE(p->reused);
-		k->busy += READ_ONCE(p->busy);
-		k->over += READ_ONCE(p->over);
-		k->live += READ_ONCE(p->live);
-	}
-}
-EXPORT_SYMBOL_IF_KUNIT(svc_reply_kunit_stats);
-#endif
