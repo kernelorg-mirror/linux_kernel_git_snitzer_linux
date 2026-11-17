@@ -322,3 +322,24 @@ step:
    connection stops (`runs` still, `send_full` up, Send-Q 0 with calls
    unread), set `svc_rtc_send_max` back to 0 at once and do not restart
    nfs-server: record `rtc_stats` and the sockets first.
+
+### The A/B again, on this boot (17 November, about 06:50)
+
+Mike, 17 November: "run the test from 105 again, if both ports are
+still up".  Both ports answer 3 of 3 from the client, the client is
+clear, nfs-server is down.  This boot has `6FB8AB5B…` loaded, so the
+second fix goes in without a reboot.  About to run, each through
+`xeu-rig/step.sh /var/tmp/zc-run-logs/t2-holdfix2-534 NAME ...`:
+
+1. `swap`: `swap-sunrpc.sh /var/tmp/zc-run-logs/sunrpc-holdfix2-534`
+   (sunrpc reads `94F9970EBA48D601405AD7A` after).
+2. `bringup`: `bringup.sh 32768 256`; `settled`: `settled.sh apply`,
+   ending in "the settled setting".
+3. The passes at the bound 0: `write-check.sh 829` and
+   `read-check.sh 830`.
+4. `ab`: `ab.sh 831:262144:0 832:262144:1048576 833:262144:524288`.
+
+If a connection stops (`runs` still, `send_full` up), the bound goes
+back to 0 at once and nfs-server is not restarted: `rtc_stats` and the
+sockets are recorded first.  The one-shot `ofp-rocky-534-pstore.conf`
+stays set, for the boot after a hang.
