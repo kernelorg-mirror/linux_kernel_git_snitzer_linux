@@ -369,3 +369,21 @@ the second fix owes are passed at the bound 0.
 deleted its files, so the next read check fills again and the ones
 after it read those files.  Next, `ab.sh 831:262144:0
 832:262144:1048576 833:262144:524288`.
+
+**The A/B with the second fix: no hang, and the bound reads faster.**
+
+| run | `svc_rtc_send_max` | GB/s | memory a byte | Send-Q mean | below TCP | rtt | cycles a KiB (work / rest / all) | held back |
+|---|---|---|---|---|---|---|---|---|
+| t2-r831 | 0 | 59.49 | 2.29 | 3.54 MB | 0.30 MB | 0.306 ms | 488 / 267 / 755 | 0 |
+| t2-r832 | 1 MiB | 62.88 | 2.10 | 2.11 MB | 0.29 MB | 0.300 ms | 507 / 258 / 765 | 16554035 |
+| t2-r833 | 512 KiB | 64.72 | 2.00 | 1.87 MB | 0.25 MB | 0.266 ms | 506 / 248 / 754 | 21223680 |
+
+New kernel warnings 0 in each.  t2-r832 is t2-r828's setting, which
+hung every connection on the first fix's predecessor: this time it ran
+through.  The held-back count is far above one a closed window
+(16.5 M in some 40 s of reads): a hold releases, enqueues, and the
+enqueue diverts straight back to a work item that finds the queue
+still full, so the work CPUs spin on it (488 to 507 cycles a KiB).
+That is to be seen in `rtc_stats` (runs against held back) before
+the bound is set anywhere.  The monitor's "possible stall" at
+07:04:43 was the rest before t2-r833 (no fio, no connection).
