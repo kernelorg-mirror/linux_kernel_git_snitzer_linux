@@ -189,4 +189,17 @@ struct svc_export *rqst_exp_find(struct cache_req *reqp, struct net *net,
 				 struct auth_domain *cl, struct auth_domain *gsscl,
 				 int fsid_type, u32 *fsidv);
 
+#if IS_ENABLED(CONFIG_KUNIT)
+extern const struct cache_detail svc_export_cache_template;
+extern const struct cache_detail svc_expkey_cache_template;
+struct svc_expkey *svc_expkey_lookup(struct cache_detail *cd,
+				     struct svc_expkey *item);
+struct svc_expkey *svc_expkey_update(struct cache_detail *cd,
+				     struct svc_expkey *new,
+				     struct svc_expkey *old);
+struct svc_export *svc_export_lookup(struct svc_export *exp);
+struct svc_export *svc_export_update(struct svc_export *new,
+				     struct svc_export *old);
+#endif
+
 #endif /* NFSD_EXPORT_H */
