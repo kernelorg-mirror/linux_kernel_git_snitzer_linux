@@ -72,3 +72,15 @@ So the next fix on the base is the bound on bytes below TCP.
 `settled.sh` gains `EXP_TCP_LOB`; [ab.sh](ab.sh) runs the base's strobe
 at a given limit.  About to run, through `step.sh`: `ab.sh 822:524288
 823:262144 824:4194304`.
+
+**t2-r822, the base with `tcp_limit_output_bytes` 512 KiB: 59.58 GB/s.**
+Below TCP 0.56 MB a socket (2.75 at 4 MiB), TCP's RTT 0.49 ms (1.71),
+the Send-Q still 3.56 MB: the bytes moved up into TCP, unsent, against
+the 4 MiB send buffer.  Memory 136.2 GB/s (2.29 a byte), cycles a KiB
+500 / 282 / 782.  **The bound stays in the base** (Mike: "have you kept
+the change that allowed for the correct movement of the bottleneck? ...
+We need to ensure that the bottlenecks get pinned to their new location
+as we move them"): it moves the queue out of the qdiscs and the NIC into
+TCP, where the next change, admission by send space, takes it.  The
+value is pinned by a sweep: 256 KiB (r823) and 4 MiB (r824) running,
+then 768 KiB (r825) and 1 MiB (r826).
