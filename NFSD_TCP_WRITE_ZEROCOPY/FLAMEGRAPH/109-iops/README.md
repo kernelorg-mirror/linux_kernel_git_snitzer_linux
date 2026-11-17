@@ -122,3 +122,14 @@ without), but it took a CPU nfsd's work could have had, on any of the
 `vers=3` (t2-r903's eight, read on the client), and nfsd had no v4
 client.  Mike, 17 November: "turn off NFSv4 and make it so that
 nfsdcld never ever runs!"
+
+Done at 21:30 (`settled.sh`, e6f31027d0367): `/etc/nfs.conf.d/zc-nfsv3-only.conf`
+(`vers4=n`, `vers4.0` to `vers4.2` too) read at each nfs-server start,
+`nfsdcld.service` masked, and the audit holds both ("nfsd NFSv4 off",
+"nfsdcld masked, not running").  After apply's restart:
+`/proc/fs/nfsd/versions` "+3 -4 -4.0 -4.1 -4.2", no nfsdcld, 512
+threads, the settled setting.  A change to settled.sh takes the WRITE
+and READ passes (AGENTS.md):
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 wpass ./write-check.sh 905
+    ./step.sh /var/tmp/zc-run-logs/r109 rpass ./read-check.sh 906
