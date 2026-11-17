@@ -54,3 +54,23 @@ ends in the load.  `twoport.sh`'s fill now always says `iodepth=16`
 hold at any IODEPTH).  About to run through `xeu-rig/step.sh
 /var/tmp/zc-run-logs/r108`: `local.sh deep 8:64`, then `nfs4k.sh
 872:16 873:32 874:64`, 512 to 2048 READs outstanding a port.
+
+### The 8:64 point and 4 KiB over NFS
+
+| run | outstanding | M IOPS | completion mean / p99 | server busy (busiest) | client busy (busiest) |
+|---|---|---|---|---|---|
+| local 8 : 32 | 256 a drive | 16.05 | 126 / 334 us | 72% (88%) | |
+| **local 8 : 64** | 512 a drive | **18.78** (2.29 to 2.39 a drive) | 215 / 659 us | 93% (99%) | |
+| t2-r872, NFS, iodepth 16 | 256 a port | 0.98 (0.49 / 0.50) | 0.52 / 1.32 ms | 33% (100%) | 85% (89%) |
+| t2-r873, NFS, iodepth 32 | 512 a port | 0.98 (0.49 / 0.49) | 1.05 / 2.41 ms | 34% (93%) | 85% (86%) |
+| t2-r874, NFS, iodepth 64 | 1024 a port | 0.95 (0.47 / 0.48) | 2.17 / 4.69 ms | 30% (90%) | 89% (92%) |
+
+- **Locally the server's 64 cores are the limit at 18.78 M IOPS**,
+  93% busy, the drives even at 2.3 M each.
+- **Over NFS about 1 M IOPS, 5% of that, at any depth**: twice the
+  queue is twice the latency and no more IOPS, a fixed service rate.
+  The client is 85 to 89% busy, evenly; the server about a third,
+  though one of its CPUs is near full (32 connections, each one's READ
+  work on one CPU).  Every run kept its files, new kernel warnings 0.
+- Next: where a 4 KiB READ's time goes, a profile of both ends at
+  iodepth 16.
