@@ -40,3 +40,49 @@ hitting and missing the L3, cycles, instructions, L3-missing loads by
 where they were served), from second 12 eight seconds of call chains
 at 999 Hz, and `client-read.sh`'s own profile from second 21.  Nothing
 on the client is changed.
+
+## t2-r861: the client copies from DRAM into DRAM
+
+78.05 GB/s under the profilers, new kernel warnings 0.  Per client
+socket over 5 s (`cli107-stat.txt`), each socket receiving about 39
+GB/s:
+
+| | socket 0, port a | socket 1, port b | a byte received |
+|---|---|---|---|
+| memory reads (`cas_count_read`) | 85.8 GB/s | 88.4 GB/s | about 2.2 |
+| memory writes (`cas_count_write`) | 81.0 GB/s | 81.4 GB/s | about 2.1 |
+| inbound I/O requests missing the L3 (`io_miss` of `io_hit + io_miss`) | 46% | 46% | |
+| L3-missing loads from local DRAM | 97.8% | 98.1% | |
+| instructions a cycle | 0.55 | 0.55 | |
+
+- **About 4.3 bytes of the client's memory traffic for each byte
+  received**, what a copy costs with both ends outside the cache: the
+  NIC's write to DRAM (1), the copy's read of it (1), and the
+  destination, fio's buffer, read for ownership (1) and written back
+  (1).
+- The source: a node's sockets hold about 38 MB unread (16 at 2.40
+  MB), and DDIO writes into a small part of the 60 MiB L3; 46% of the
+  NIC's inbound requests miss.  The destination: fio's buffers are 16
+  jobs × iodepth 16 × 1 MiB, 256 MiB a port.
+- Not NUMA: 98% of L3-missing loads are local, UPI data traffic is
+  small, and `memcpy`'s samples split 15.97% and 16.29% between the
+  nodes.  (Those load counters do not see `rep movsb`'s loads; the
+  copy shows only in the memory controllers' counts.)
+- `memcpy` is 32.28% of the client's cycles (`cli107-self.txt`), all
+  from `_copy_to_iter` in the RPC receive worker's `tcp_recvmsg`: about
+  5 GB/s a core, the copy waiting on memory.
+- Against the frame: iperf3 alone received 98.31 GB/s on this client,
+  copying too, but into a small buffer it reuses, its destination in
+  the cache.  NFS O_DIRECT copies into fio's 256 MiB a port.
+
+## io_uring at the client (Mike: "please consider using io_uring at the fio client")
+
+It leaves the copy as it is.  Registered buffers (`fixedbufs=1`) hand
+NFS pages already pinned, which removes `try_grab_folio_fast` (2.61%),
+and io_uring reaps completions without a system call each batch.  If
+NFS's direct path does not take io_uring's nonblocking submit, each
+READ goes to io_uring's own workers, which may cost more.  To run:
+`twoport.sh`'s new `IOENGINE` (`libaio`, the default, so the passes
+keep their shape) and `FIXEDBUFS`, in three strobes at the settled
+setting with this round's client counters: libaio, io_uring, and
+io_uring with `fixedbufs=1`.
