@@ -287,9 +287,12 @@ runs before pstore's panic dump).  After it, check
 Where it stands: tardis2 runs build 534 with the first hold-back fix
 (`6FB8AB5B48500088A19D991`) loaded; `updates/` holds the second
 (`94F9970EBA48D601405AD7A`, `5562f5e440e7f`, worktree `3c583ea8bbcd2`),
-which loads at the next boot.  nfs-server is down.  The client still
-holds its 8 NFS mounts and 34 fio from t2-r828; clearing them is
-Mike's (the session was refused it).  The `svc_rtc_kunit` suite is not
+which loads at the next boot.  nfs-server is down.  The client is
+clear (Mike: "go ahead, clear the client", 17 November, 06:44): the 34
+fio from t2-r828 killed (32 sat in D on the hard mounts until
+`umount -f -l` of the 8 mounts let them go), no NFS mount, no
+connection to port 2049; the steps are in
+`/var/tmp/zc-run-logs/client-clear-1117/`.  The `svc_rtc_kunit` suite is not
 to be run: it took the host down (above) and the NULL call is not
 understood.  The one-shot `ofp-rocky-534-pstore.conf` is set.
 
@@ -306,7 +309,7 @@ step:
 2. kdump armed (`/sys/kernel/kexec_crash_loaded` 1), both ports pinged
    (`PORT-DEAD-AFTER-BOOT.md`), `/sys/module/sunrpc/srcversion` reads
    `94F9970EBA48D601405AD7A` and `svc_rtc_send_max` 0.
-3. Only once the client is cleared: `bringup.sh` (crashlog and
+3. With no NFS mount on the client (check it): `bringup.sh` (crashlog and
    netconsole included), then `settled.sh apply` ending in "the
    settled setting".
 4. The passes this sunrpc owes (AGENTS.md's hard rules), with the
