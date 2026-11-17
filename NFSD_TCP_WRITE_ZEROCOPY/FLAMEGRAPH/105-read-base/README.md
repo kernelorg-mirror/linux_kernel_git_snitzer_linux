@@ -42,3 +42,33 @@ it (`EXP_RTC_BALANCE`, `EXP_RFS`, `NCONN`) and settles without it after.
 
 About to run, through `step.sh`: the module swapped in with no client
 connected, `settled.sh apply`, then `prof.sh 821`.
+
+## t2-r821: the base, profiled
+
+**61.22 GB/s** (30.60 and 30.61), no new kernel warning, settled after.
+The placement is as meant: 32 connections on 32 CPUs, one each.
+
+- **RFS did what it was there for.**  In the work CPUs' profile the
+  zone lock is gone (`rmqueue_bulk` 0.12% of their samples, against
+  about 7% at N in t2-r779) and so is the socket's contention
+  (`lock_sock_nested` 0.25%, against 4.57%).  The ACKs are processed on
+  the work CPUs now (`tcp_v4_do_rcv` 21.9% of their samples,
+  `tcp_clean_rtx_queue` 11.2%, `skb_release_data` 5.4% self), which are
+  28% busy; the rings 33%.
+- **But the server holds far too many bytes.**  Each socket's Send-Q is
+  3.50 MB (max 4.19, the 4 MiB send buffer), 2.75 MB of it below TCP
+  (`skmem t`: in the qdisc and the NIC), 390 segments unacked; TCP's RTT
+  1.71 ms, against 0.27 at N.  32 sockets hold about 112 MB, 88 MB of
+  it below TCP, three and a half times the 32 MiB cache: memory 136.2
+  GB/s, **2.22 bytes a byte sent**, at the mixed ceiling of about 140.
+  The client's sockets hold 0.12 MB unread (N 3.30): the backlog has
+  moved from the client to the server.
+- **What lets it:** `net.ipv4.tcp_limit_output_bytes` is 4 MiB in
+  `settled.sh` (TCP small queues: the bytes a socket may have below
+  TCP), so 32 sockets may put 128 MiB in the qdiscs.  The NIC's queues
+  take 8 MB (BQL); the rest waits in fq_codel.
+
+So the next fix on the base is the bound on bytes below TCP.
+`settled.sh` gains `EXP_TCP_LOB`; [ab.sh](ab.sh) runs the base's strobe
+at a given limit.  About to run, through `step.sh`: `ab.sh 822:524288
+823:262144 824:4194304`.

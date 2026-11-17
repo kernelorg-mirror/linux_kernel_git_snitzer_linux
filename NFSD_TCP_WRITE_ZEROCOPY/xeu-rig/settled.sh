@@ -456,6 +456,10 @@ declare -A SYSCTL=(
 	[net.ipv4.tcp_pacing_ca_ratio]=120
 	[net.ipv4.tcp_rto_min_us]=200000
 )
+# EXP_TCP_LOB holds a run (and apply) to another net.ipv4.tcp_limit_output_bytes:
+# the bytes a socket may have below TCP, in the qdisc and the NIC (TCP small
+# queues; FLAMEGRAPH round 105: READs on the base held 2.75 MB a socket there).
+[ -n "${EXP_TCP_LOB:-}" ] && SYSCTL[net.ipv4.tcp_limit_output_bytes]=$EXP_TCP_LOB
 # The client's, read over its management address and never changed from
 # here ("the client untouched"): what bears on how it receives and sends.
 declare -A CLI_SYSCTL=(
@@ -598,6 +602,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	for k in $PORTS; do [ -n "${EXP_DEFER:-}" ] && [ "$EXP_DEFER" != "${DEFER[$k]}" ] && OFF="$OFF defer_$k=$EXP_DEFER"; done
 	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
+	[ -n "${EXP_TCP_LOB:-}" ] && [ "$EXP_TCP_LOB" != 4194304 ] && OFF="$OFF tcp_limit_output_bytes=$EXP_TCP_LOB"
 	[ -n "${EXP_RODATA:-}" ] && [ "$EXP_RODATA" != "$RODATA" ] && OFF="$OFF rodata=$EXP_RODATA"
 	[ -n "${EXP_RX_REGION_STACK:-}" ] && [ "$EXP_RX_REGION_STACK" != "$RX_REGION_STACK" ] && OFF="$OFF rx_region_stack=$EXP_RX_REGION_STACK"
 	[ -n "${EXP_REGION_PAGES:-}" ] && [ "$EXP_REGION_PAGES" != "$REGION_PAGES" ] && OFF="$OFF region_pages=$EXP_REGION_PAGES"

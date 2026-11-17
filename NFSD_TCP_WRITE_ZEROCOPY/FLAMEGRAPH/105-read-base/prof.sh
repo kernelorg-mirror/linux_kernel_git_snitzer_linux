@@ -15,7 +15,7 @@ export EXP_RTC_BALANCE=${BASE_BALANCE:-Y} EXP_RFS=${BASE_RFS:-32768} NCONN=${BAS
 ) &
 $H/../104-rx-cpus/read-prof.sh $n; rc=$?
 wait
-(cd $H/../../xeu-rig && env -u EXP_RTC_BALANCE -u EXP_RFS -u NCONN ./settled.sh apply > $O/apply-settled.txt 2>&1; echo "settled again: $(tail -1 $O/apply-settled.txt)")
+(cd $H/../../xeu-rig && env -u EXP_RTC_BALANCE -u EXP_RFS -u NCONN -u EXP_TCP_LOB ./settled.sh apply > $O/apply-settled.txt 2>&1; echo "settled again: $(tail -1 $O/apply-settled.txt)")
 gb=$(grep -m1 '^total' $O/run.log | grep -oE '[0-9.]+')
 awk -F, -v gb=$gb '$3 ~ /hnf_mc_reqs/ {printf "memory: %.1f GB/s, %.2f bytes a byte sent\n", $1 * 64 / 5e9, $1 * 64 / 5e9 / gb}' $O/mem.txt
 grep placed $O/rtc_stats.w1
