@@ -343,3 +343,20 @@ If a connection stops (`runs` still, `send_full` up), the bound goes
 back to 0 at once and nfs-server is not restarted: `rtc_stats` and the
 sockets are recorded first.  The one-shot `ofp-rocky-534-pstore.conf`
 stays set, for the boot after a hang.
+
+The swap (sunrpc `94F9970EBA48D601405AD7A`, `svc_rtc_send_max` 0),
+`bringup.sh 32768 256` (kdump armed, netconsole reaches the client) and
+`settled.sh apply` ("the settled setting") all exited 0, and both ports
+answered 3 of 3 again after `settled.sh` reopened them.
+
+**t2-r829, the WRITE pass: PASS, 77.76 GB/s** (38.88 on each port,
+wire 39.20 and 39.10), no drive stepped down (each 9.7 GB/s), new
+kernel warnings 0.
+
+t2-r830, the READ pass, started 06:50:39.  It fills its own files:
+`read-check.sh` never got `twoport.sh`'s `KEEP_FILES` (`201464411779f`),
+which Mike meant for reproducibility between read checks, so each
+read check filled new files and deleted them at the end.  Once t2-r830
+has ended, `read-check.sh` passes `KEEP_FILES=1` by default (the trim
+and rest as they are: `fstrim` discards only free blocks), and then
+`ab.sh 831:262144:0 832:262144:1048576 833:262144:524288` runs.
