@@ -1620,6 +1620,23 @@ static bool svc_rtc_send_full(struct svc_rtc_conn *conn)
 	return true;
 }
 
+/*
+ * Leave the next call in the socket while the send queue is full.  The
+ * work item owns the transport (XPT_BUSY, taken by svc_xprt_enqueue()
+ * before it diverted here) until a receive releases it; a receive held
+ * back must release it too, or no enqueue (new data, write space, close)
+ * reaches the transport again.  The enqueue after the release finds no
+ * write space (svc_rtc_send_full() set SOCK_NOSPACE) and does nothing, unless
+ * an ACK cleared the mark in the meantime, whose write-space enqueue found
+ * the transport still busy: then it takes the transport back here.
+ */
+static void svc_rtc_hold_recv(struct svc_xprt *xprt)
+{
+	smp_mb__before_atomic();
+	clear_bit(XPT_BUSY, &xprt->xpt_flags);
+	svc_xprt_enqueue(xprt);
+}
+
 /* Move @conn's work item to @cpu, keeping the per-CPU counts. */
 static void svc_rtc_set_cpu(struct svc_rtc_conn *conn, int cpu)
 {
@@ -1943,8 +1960,11 @@ static void svc_rtc_work(struct work_struct *work)
 	svc_rtc_stat_inc(runs);
 	svc_rtc_run_completions(conn);
 
-	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags) &&
-	    !svc_rtc_send_full(conn)) {
+	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
+		if (svc_rtc_send_full(conn)) {
+			svc_rtc_hold_recv(xprt);
+			goto sends;
+		}
 		switch (svc_rtc_recv_step(xprt, &reason, NULL)) {
 		case SVC_RTC_THREAD:
 			svc_rtc_stat_inc(fallback[reason]);
@@ -1959,6 +1979,7 @@ static void svc_rtc_work(struct work_struct *work)
 		}
 	}
 
+sends:
 	dead = svc_rtc_conn_dead(conn);
 	svc_rtc_drain_sends(conn, dead);
 
