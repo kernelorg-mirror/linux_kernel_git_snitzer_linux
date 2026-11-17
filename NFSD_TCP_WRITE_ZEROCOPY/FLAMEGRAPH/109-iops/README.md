@@ -63,3 +63,21 @@ load when percpu came into settled-iops.sh (its directory is
 
     cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 depth2 ./settled-iops.sh run \
         ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 895:16 896:64 897:16 898:64
+
+| Run (percpu) | iodepth | in flight | M IOPS (a / b) | completion mean / p99 | server busy (busiest) | client busy (busiest) |
+|---|---|---|---|---|---|---|
+| t2-r895 | 16 | 768 | 1.62 (0.81 / 0.82) | 0.47 / 1.65 ms | 48% (82%) | 53% (65%) |
+| t2-r897 | 16 | 768 | 1.56 (0.78 / 0.78) | 0.49 / 1.66 ms | 45% (79%) | 50% (57%) |
+| t2-r888, r890, r892 | 32 | 1,536 | 1.91 to 1.96, median 1.93 | 0.79 / 2.80 to 2.97 ms | 56 to 57% (92 to 97%) | 65 to 66% (72 to 75%) |
+| t2-r896 | 64 | 3,072 | **2.21** (1.11 / 1.10) | 1.38 / 4.15 ms | 67% (98%) | 75% (80%) |
+| t2-r898 | 64 | 3,072 | 2.19 (1.09 / 1.11) | 1.41 / 4.11 ms | 67% (98%) | 75% (86%) |
+
+- **The rate still climbs with depth on the canary-WIP client, but
+  less each time:** 1.59, 1.93 and 2.20 M IOPS at 16, 32 and 64
+  (+21%, then +14%), while the mean READ takes 0.48, 0.80 and 1.40 ms.
+  On build 469 depth 64 was below 32 (t2-r879), the client full.
+- **At 64 the server's busiest CPU is full (98% in both runs)** while
+  its mean is 67% and the client's 75%.  That CPU's connections set
+  the pace: the next limit is how the work is spread over the server's
+  CPUs, item 3 of the plan.
+- New kernel warnings 0 in all four; settled.sh's setting after.
