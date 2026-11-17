@@ -93,3 +93,12 @@ always on `libaio`, so the kept files' markers hold).  About to run,
 through `step.sh /var/tmp/zc-run-logs/r107 engine`: `ab-engine.sh
 862:libaio 863:io_uring 864:io_uring:fixed 865:libaio`, libaio on
 either side for the spread.
+
+**`client-read.py` no longer counts iowait as busy** (Mike: "fix
+client-read.py to not count iowait as busy").  Its busy was 100 less
+%idle, so io_uring's wait for completions, 9.38% iowait in t2-r863
+where libaio's t2-r862 had none, read as 93% busy for the same work
+(sys, irq, soft and usr 83.6% against 83.0%).  Busy is now 100 less
+%idle and %iowait, with iowait given beside it; t2-r863's summary was
+written again with it (84% and 83%).  Summaries before t2-r863 had no
+iowait to speak of and are unchanged by it.

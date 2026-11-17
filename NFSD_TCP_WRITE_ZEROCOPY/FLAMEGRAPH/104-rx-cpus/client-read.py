@@ -116,18 +116,29 @@ for side in ('cli', 'srv'):
 			 f'{1e3 * st.mean(sq) / per:.3f} ms in Send-Q')
 	print(line)
 
-# client CPUs over the window
-busy = {}
+# client CPUs over the window.  Busy is what the CPUs did, 100 less
+# %idle and %iowait: a CPU in iowait is idle with I/O outstanding, and
+# io_uring's wait for completions counts there where libaio's does not
+# (FLAMEGRAPH round 107: t2-r863 9.38% iowait, the same work as libaio's
+# t2-r862).  iowait is given beside it.
+busy, iow = {}, {}
+col = None
 for line in open(f'{O}/cli-mpstat-w.txt'):
 	s = line.split()
-	if s and s[0] == 'Average:' and s[1].isdigit():
-		busy[int(s[1])] = 100 - float(s[-1])
+	if s and s[0] == 'Average:' and s[1] == 'CPU':
+		col = {k: i for i, k in enumerate(s)}
+	elif s and s[0] == 'Average:' and s[1].isdigit():
+		idle = float(s[col['%idle']]) if col else float(s[-1])
+		w = float(s[col['%iowait']]) if col and '%iowait' in col else 0.0
+		busy[int(s[1])] = 100 - idle - w
+		iow[int(s[1])] = w
 if busy:
 	n0 = [busy[c] for c in busy if c < 24]
 	n1 = [busy[c] for c in busy if c >= 24]
 	top = sorted(busy.items(), key=lambda x: -x[1])[:8]
 	print(f'client CPUs busy: node 0 mean {st.mean(n0):.0f}%, node 1 mean {st.mean(n1):.0f}%; busiest '
-	      + ' '.join(f'{c}:{b:.0f}%' for c, b in top))
+	      + ' '.join(f'{c}:{b:.0f}%' for c, b in top)
+	      + f'; iowait mean {st.mean(iow.values()):.1f}%, not counted as busy')
 p = f'{O}/cli-perf-comm.txt'
 if os.path.exists(p):
 	print('client cycles by command: ' + '; '.join(' '.join(l.split()[:2]) for l in open(p).readlines()[:8]))
