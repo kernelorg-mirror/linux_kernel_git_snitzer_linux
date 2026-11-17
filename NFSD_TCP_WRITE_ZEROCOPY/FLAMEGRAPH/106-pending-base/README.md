@@ -326,3 +326,8 @@ marker still deletes the files and markers after its load, so a write
 that made its files never leaves them marked whole.  It shows in
 `geometry.txt` as "files kept from the last fill, written in place".
 To be seen at the next write and read checks.
+
+**The sweep above 1 MiB** (Mike: "run the 1.5 MiB and 2 MiB sweep after
+this").  About to run, through `xeu-rig/step.sh
+/var/tmp/zc-run-logs/r106-promise sweep ...`: `ab.sh 854:1572864:16
+855:2097152:16 856:1048576:16`, 1 MiB again last for its spread.
