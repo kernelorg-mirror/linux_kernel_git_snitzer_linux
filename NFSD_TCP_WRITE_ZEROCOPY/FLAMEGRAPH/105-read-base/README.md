@@ -281,3 +281,41 @@ runs before pstore's panic dump).  After it, check
 `/sys/module/efi_pstore/parameters/pstore_disable` reads N and
 `/sys/module/pstore/parameters/backend` reads `efi`, and read
 `/sys/fs/pstore/` after any crash.
+
+### Next boot: the hold-back fix on the rig (handoff, 17 November)
+
+Where it stands: tardis2 runs build 534 with the first hold-back fix
+(`6FB8AB5B48500088A19D991`) loaded; `updates/` holds the second
+(`94F9970EBA48D601405AD7A`, `5562f5e440e7f`, worktree `3c583ea8bbcd2`),
+which loads at the next boot.  nfs-server is down.  The client still
+holds its 8 NFS mounts and 34 fio from t2-r828; clearing them is
+Mike's (the session was refused it).  The `svc_rtc_kunit` suite is not
+to be run: it took the host down (above) and the NULL call is not
+understood.  The one-shot `ofp-rocky-534-pstore.conf` is set.
+
+After the boot, in order, committing each outcome before the next
+step, and every risky step through `xeu-rig/step.sh`, one command to a
+step:
+
+1. The boot: `cat /proc/cmdline` has `efi_pstore.pstore_disable=0
+   pstore.max_reason=2` (if not, the one-shot did not take: say so),
+   `/sys/module/efi_pstore/parameters/pstore_disable` reads N and
+   `/sys/module/pstore/parameters/backend` reads `efi`.  Anything
+   already in `/sys/fs/pstore/` is copied out and read before it is
+   removed.
+2. kdump armed (`/sys/kernel/kexec_crash_loaded` 1), both ports pinged
+   (`PORT-DEAD-AFTER-BOOT.md`), `/sys/module/sunrpc/srcversion` reads
+   `94F9970EBA48D601405AD7A` and `svc_rtc_send_max` 0.
+3. Only once the client is cleared: `bringup.sh` (crashlog and
+   netconsole included), then `settled.sh apply` ending in "the
+   settled setting".
+4. The passes this sunrpc owes (AGENTS.md's hard rules), with the
+   bound at 0: `xeu-rig/write-check.sh <n>` (77.6 GB/s or more) and
+   `xeu-rig/read-check.sh <n>` (71.5 or more).  The next run is
+   t2-r829.
+5. Then round 105's A/B again, the bound in turns (`ab.sh
+   <n>:262144:0 <n+1>:262144:1048576 <n+2>:262144:524288`), the plan
+   that t2-r828 hung.  Commit the command before it runs.  If a
+   connection stops (`runs` still, `send_full` up, Send-Q 0 with calls
+   unread), set `svc_rtc_send_max` back to 0 at once and do not restart
+   nfs-server: record `rtc_stats` and the sockets first.
