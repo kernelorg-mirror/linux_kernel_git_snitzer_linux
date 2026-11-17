@@ -147,7 +147,8 @@ runs a side, with t2-r883 to r887 the base:
    (`FLAMEGRAPH/109-iops/README.md`, t2-r888 to r893).  percpu, what
    auto picks, read 1.93 M IOPS median against pernode's 1.89, 2% more
    and every percpu run above every pernode run.  Mike: pernode stays
-   settled, percpu ruled out for now.
+   settled for the passes, and **`settled-iops.sh` holds percpu** ("for
+   settled-iops.sh settle percpu").
 2. **Depth: iodepth 16 and 64** on the new client, to see whether the
    rate now follows the number in flight (latency-bound) or holds (a
    limit somewhere).
@@ -163,8 +164,9 @@ runs a side, with t2-r883 to r887 the base:
 ## The server side: `xeu-rig/settled-iops.sh`
 
 `settled.sh`'s setting with David's server values held over it:
-768 nfsd threads (512 settled), `rmem_max` and `wmem_max` 256 MiB, and
-`tcp_rmem` / `tcp_wmem` "4096 1048576 268435456".  Its `run` also sets
+768 nfsd threads (512 settled), `rmem_max` and `wmem_max` 256 MiB,
+`tcp_rmem` / `tcp_wmem` "4096 1048576 268435456", and since round 109
+`pool_mode` percpu (pernode settled), 64 pools of 12 threads.  Its `run` also sets
 his load:
 
 - each filesystem mounted from its own server address (`SRV_ALIAS=1`),
