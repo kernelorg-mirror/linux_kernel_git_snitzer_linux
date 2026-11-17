@@ -172,7 +172,10 @@ agents keep making: a body written as one long line per paragraph, or a
 `git commit -m` with a long paragraph. Write the message to a file or a
 heredoc already wrapped, and before committing check it:
 `git log -1 --format=%B | awk 'length > 72'` must print nothing. Amend
-(at the tip) or reword the commit when it does.
+(at the tip) or reword the commit when it does.  **A `Fixes:` line may be longer
+(Mike, 17 November: "its fine for Fixes to be longer"):** it keeps the
+whole subject of the commit it names on one line, as upstream does, and
+is the one line the check may print.
 
 A commit message says what the change is and why. It carries no
 disclaimer about the state of the work ("Not booted.", "untested",
