@@ -445,3 +445,30 @@ sunrpc `AF720978447140137AFC2FE` after), `settled` (`settled.sh
 apply`), `write-check.sh 834`, `read-check.sh 835` (the first with
 `KEEP_FILES`: it fills), then `ab.sh 836:262144:0 837:262144:1048576
 838:262144:524288`, with `rtc_stats` saved before and after each.
+
+The swap and `settled.sh apply` exited 0; both ports answered 3 of 3
+after.
+
+**t2-r834, the WRITE pass: PASS, 78.10 GB/s**, no drive stepped down,
+new kernel warnings 0.  **t2-r835, the READ pass: PASS, 73.10 GB/s**,
+new kernel warnings 0; it filled 17 GB of files and marked every
+export, so the read checks after it read the same files.
+
+**The A/B with the write-space fix: the churn is gone.**
+
+| run | `svc_rtc_send_max` | GB/s | memory a byte | Send-Q mean | rtt | cycles a KiB (work / rest / all) | held back | `send_nospace` |
+|---|---|---|---|---|---|---|---|---|
+| t2-r836 | 0 | 59.57 | 2.29 | 3.54 MB | 0.332 ms | 485 / 260 / 745 | 0 | 0 |
+| t2-r837 | 1 MiB | 63.08 | 2.09 | 2.16 MB | 0.279 ms | 463 / 246 / 709 | 459083 | 43362467 |
+| t2-r838 | 512 KiB | 64.47 | 2.01 | 1.85 MB | 0.267 ms | 455 / 231 / 686 | 491654 | 46677483 |
+
+New kernel warnings 0 in each; the bound back at 0 and the setting
+settled after.  Against the second fix alone (t2-r832 and t2-r833):
+the receives held back fall 36 and 43 times (16.55 M to 0.46 M, 21.22
+M to 0.49 M), the refusals move to the test in softirq, and the cycles
+a KiB fall from 765 to 709 and from 754 to 686 (the work CPUs from 507
+and 506 to 463 and 455, under the unbounded run's 485).  The rate is
+the second fix's (63.08 against 62.88, 64.47 against 64.72), 8.2% over
+the bound at 0 at 512 KiB.  `send_nospace` is high (some 46 M in some
+30 s of reads, over 32 connections): every enqueue while over the
+bound, ACKs and arriving calls both, pays that one test.
