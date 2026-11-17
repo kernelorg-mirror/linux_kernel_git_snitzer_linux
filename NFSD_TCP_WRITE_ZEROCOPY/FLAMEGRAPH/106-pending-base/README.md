@@ -365,3 +365,15 @@ MiB").  About to run, on the pending base with the bound at 1.5 MiB:
 then the same with `./read-check.sh 859`, each through `step.sh
 /var/tmp/zc-run-logs/r106-promise`.  The read check is the first to read
 a write check's kept files.
+
+**Both passes at 1.5 MiB pass.**  **t2-r858, WRITE: PASS, 77.83
+GB/s**, no drive stepped down, new kernel warnings 0 ("files kept from
+the last fill, written in place: 17G").  **t2-r859, READ: PASS, 79.24
+GB/s**, new kernel warnings 0, reading the write check's files with no
+fill ("files kept from the last run: 17G"): the `twoport.sh` fix holds
+end to end.  The settled setting's READ pass on this stack was 73.12
+(t2-r849): +8.4% in the pass's own shape.  Settling the bound at 1.5
+MiB with round 105's base is Mike's decision; `settled.sh` is unchanged.
+The watch's stall test counts READ work items, which WRITEs do not
+run, so it reported a false stall in t2-r858's load (wire 39 GB/s a
+port at the time).
