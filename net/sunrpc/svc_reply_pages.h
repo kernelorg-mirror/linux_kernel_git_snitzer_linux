@@ -20,6 +20,14 @@ struct svc_reply_tx {
 	unsigned int		size;	/* room in pages[] */
 	unsigned int		n;	/* pages held */
 	bool			copied;	/* TCP copied them (not zero copy) */
+	/*
+	 * Replies that share skbs (svc_reply_tx_link_skb()): each one linked
+	 * behind the chain's head holds a reference on the head, and the head
+	 * releases them all.  Changed only under the socket lock.
+	 */
+	struct svc_reply_tx	*chain_head;	/* NULL: this one is a head */
+	struct svc_reply_tx	*chain_next;	/* the head's members */
+	unsigned int		chain_nr;	/* a head's members */
 	struct page		*pages[];
 };
 

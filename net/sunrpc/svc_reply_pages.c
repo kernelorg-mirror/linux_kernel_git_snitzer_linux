@@ -47,6 +47,8 @@
 #define SVC_REPLY_RECYCLE_MIN	(64 * 1024)
 /* Empty descriptors a CPU keeps for its next sends. */
 #define SVC_REPLY_SPARE_MAX	64
+/* Replies one chain of shared skbs holds, the head among them. */
+#define SVC_REPLY_CHAIN_MAX	32
 
 struct svc_reply_cache {
 	spinlock_t		lock;	/* every consumer: fill, send, trim */
@@ -81,9 +83,11 @@ static struct shrinker *svc_reply_shrinker;
 
 static void svc_reply_tx_complete(struct sk_buff *skb, struct ubuf_info *uarg,
 				  bool zerocopy_success);
+static int svc_reply_tx_link_skb(struct sk_buff *skb, struct ubuf_info *uarg);
 
 static const struct ubuf_info_ops svc_reply_tx_ops = {
 	.complete	= svc_reply_tx_complete,
+	.link_skb	= svc_reply_tx_link_skb,
 };
 
 static void svc_reply_put_pages(struct page **pages, unsigned int n)
@@ -305,6 +309,10 @@ struct svc_reply_tx *svc_reply_tx_take(struct svc_rqst *rqstp,
 	tx->ubuf.ops = &svc_reply_tx_ops;
 	tx->ubuf.flags = SKBFL_ZEROCOPY_FRAG | SKBFL_DONT_ORPHAN;
 	refcount_set(&tx->ubuf.refcnt, 1);
+	tx->copied = false;
+	tx->chain_head = NULL;
+	tx->chain_next = NULL;
+	tx->chain_nr = 0;
 	tx->cpu = raw_smp_processor_id();
 	svc_reply_stat_inc(sends);
 	svc_reply_stat_add(sent_pages, tx->n);
@@ -317,23 +325,13 @@ keep:
 	return NULL;
 }
 
-/*
- * ubuf_info_ops.complete: one call for each skb that carried the send and
- * one for the sender's reference; the last gives the pages to the sending
- * CPU's cache, or frees them if it is full.  In softirq or process context.
- */
-static void svc_reply_tx_complete(struct sk_buff *skb, struct ubuf_info *uarg,
-				  bool zerocopy_success)
+/* A send TCP is done with: its pages to its CPU's cache, or freed. */
+static void svc_reply_tx_done(struct svc_reply_tx *tx)
 {
-	struct svc_reply_tx *tx = container_of(uarg, struct svc_reply_tx, ubuf);
 	unsigned int cap = READ_ONCE(svc_reply_recycle);
 	struct svc_reply_cache *c;
 
-	if (!zerocopy_success)
-		WRITE_ONCE(tx->copied, true);
-	if (!refcount_dec_and_test(&uarg->refcnt))
-		return;
-	if (tx->copied)
+	if (READ_ONCE(tx->copied))
 		svc_reply_stat_inc(copied);
 	svc_reply_stat_add(live, -1);
 	c = per_cpu_ptr(&svc_reply_cache, tx->cpu);
@@ -345,6 +343,77 @@ static void svc_reply_tx_complete(struct sk_buff *skb, struct ubuf_info *uarg,
 		return;
 	}
 	llist_add(&tx->node, &c->ready);
+}
+
+/*
+ * ubuf_info_ops.complete: one call for each skb that carried the send and
+ * one for the sender's reference.  At the last, a send linked behind a
+ * chain's head drops the reference it holds on the head; a head releases
+ * itself and every send linked behind it, all of whose own references are
+ * gone by then.  In softirq or process context.
+ */
+static void svc_reply_tx_complete(struct sk_buff *skb, struct ubuf_info *uarg,
+				  bool zerocopy_success)
+{
+	struct svc_reply_tx *tx = container_of(uarg, struct svc_reply_tx, ubuf);
+	struct svc_reply_tx *next;
+
+	if (!zerocopy_success)
+		WRITE_ONCE(tx->copied, true);
+	if (!refcount_dec_and_test(&uarg->refcnt))
+		return;
+	if (tx->chain_head) {
+		svc_reply_tx_complete(skb, &tx->chain_head->ubuf,
+				      zerocopy_success);
+		return;
+	}
+	for (; tx; tx = next) {
+		next = tx->chain_next;
+		svc_reply_tx_done(tx);
+	}
+}
+
+/*
+ * ubuf_info_ops.link_skb, under the socket lock: let consecutive replies
+ * share skbs, as io_uring's notifications do (io_link_skb()), so that TCP
+ * builds the same full segments it does from spliced replies instead of
+ * ending each reply's data in an skb of its own.  A reply whose data lands
+ * on an skb that carries an earlier reply's joins that reply's chain and
+ * takes a reference on the chain's head for itself; the skb keeps the
+ * earlier reply's ubuf_info, and the whole chain is released once the last
+ * skb carrying any of it is freed.  Only replies, and at most
+ * SVC_REPLY_CHAIN_MAX in a chain: that bounds the pages one chain holds.
+ */
+static int svc_reply_tx_link_skb(struct sk_buff *skb, struct ubuf_info *uarg)
+{
+	struct svc_reply_tx *tx = container_of(uarg, struct svc_reply_tx, ubuf);
+	struct ubuf_info *prev_uarg = skb_zcopy(skb);
+	struct svc_reply_tx *prev, *head;
+
+	if (!prev_uarg) {
+		net_zcopy_get(uarg);
+		skb_zcopy_init(skb, uarg);
+		return 0;
+	}
+	if (prev_uarg == uarg)
+		return 0;
+	if (prev_uarg->ops != &svc_reply_tx_ops ||
+	    skb_shinfo(skb)->nr_frags >= MAX_SKB_FRAGS)
+		return -EEXIST;
+	/* A send joins a chain once, before any send joins behind it. */
+	if (tx->chain_head || tx->chain_next)
+		return -EEXIST;
+	prev = container_of(prev_uarg, struct svc_reply_tx, ubuf);
+	head = prev->chain_head ?: prev;
+	if (head->chain_nr + 1 >= SVC_REPLY_CHAIN_MAX)
+		return -EEXIST;
+	head->chain_nr++;
+	tx->chain_head = head;
+	tx->chain_next = head->chain_next;
+	head->chain_next = tx;
+	/* @head is held by @skb, through @prev: take this send's own. */
+	net_zcopy_get(&head->ubuf);
+	return 0;
 }
 
 static unsigned long svc_reply_shrink_count(struct shrinker *s,
