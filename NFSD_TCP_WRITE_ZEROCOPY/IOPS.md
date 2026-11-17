@@ -329,3 +329,10 @@ The root drive's hang left `refs/remotes/origin/kernel-7.3/canary-WIP`
 empty (written 22:14), with `FETCH_HEAD` and `MERGE_RR`; the ref is
 removed, and the pack and every loose object written since 20:00
 check out.
+
+Swapped at 23:05 (`/var/tmp/zc-run-logs/541/steps.log`): sunrpc
+`7A2D473DDE10AB1E01D4BB3` and nfsd `10AE6D2903DB88D99FB4A23` run from
+541's `updates/` (all eight modules of the set).  nfsd came back on 64
+per-CPU pools; `settled.sh apply` put it back on `pernode`, 512
+threads on 8-55, and ends in "the settled setting", no BAD item, no new
+kernel warning, kdump armed.  No WRITE or READ pass has run on it yet.
