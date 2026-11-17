@@ -2837,3 +2837,30 @@ per-CPU page lists are `high` 874 and `batch` 15 pages, against 16 a READ.
 
 About to run, through `step.sh`: [pcp-strobe.sh](pcp-strobe.sh) `818 8`,
 `vm.percpu_pagelist_high_fraction` 8 for the strobe, put back after.
+
+**t2-r818, `percpu_pagelist_high_fraction` 8: 64.49 GB/s, not a
+verdict on the page lists.**  The lists grew (`high` 874 to 16,043
+pages), cycles a KiB did not move (work items 377, rings 215, all 592,
+against r815's 382 / 207 / 589), and memory read 90.1 GB/s (1.40 bytes
+a byte).  But 12 of the 24 connections landed two to a CPU, and those
+12 transports made 60k to 65k sends against 124k to 130k.  Put back to
+0 after; `high` decays back on its own (6,385 and 7,835 twenty seconds
+later).
+
+**At N the rate follows how many connections share a CPU** (every N
+run tonight, `placed` in `rtc_stats`):
+
+| connections on a shared CPU | runs, GB/s |
+|---|---|
+| 4 | r815 73.02 |
+| 5 | r739 72.76, r773 73.49, r811 71.66 |
+| 7 | r817 71.78 |
+| 8 | r800 70.54 |
+| 10 | r779 71.34, r809 68.64 |
+| 11 | r813 69.73 |
+| 12 | r818 64.49 |
+
+About 0.7 GB/s a connection that shares a CPU.  The hash places 24
+connections on 48 CPUs afresh at every mount, so this is most of N's run
+to run spread, and 0 shared would be about 75 to 76.  The page lists'
+effect is to be judged on a run whose placement matches its pair's.
