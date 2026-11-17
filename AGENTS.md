@@ -441,6 +441,14 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**tardis2's next boot (Mike, 17 November): build 534 with EFI pstore
+(the one-shot entry `ofp-rocky-534-pstore.conf`) and the hold-back
+fix's `sunrpc.ko` (`94F9970EBA48D601405AD7A`) in `updates/`.  Start
+at "The hold-back released last, and the next boot" at the end of
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/105-read-base/README.md`; the
+`svc_rtc_kunit` suite took the host down on 17 November and is not
+to be run again until its crash is understood.**
+
 **Withdrawn (Mike, 17 November: "I'm not pursuing that gitlab build
 given its unlikely to help"): the boot below.  tardis2 stays on build
 534 with `sunrpc-nosplit-534`.**  ~~tardis2's next boot (Mike, 16

@@ -247,3 +247,37 @@ This boot (06:18) loaded the hold-fix `sunrpc.ko`
 nfs-server is inactive, no `WARNING:`, `BUG:` or `Oops`.  The suite is
 not to be run again until its teardown is understood and the crash can
 be caught (`pc` and `lr` at least).
+
+### The hold-back released last, and the next boot (17 November, 06:40)
+
+`5562f5e440e7f` ("SUNRPC: Release a held-back transport after the
+pass's sends") moves `svc_rtc_hold_recv()` to the end of the pass,
+after the sends and the requeue, just before the pass drops its xprt
+reference.  The ordinary receive path releases the transport before
+its sends too (`svc_xprt_received()` in the receive), so this
+narrows the hold-back pass to what it needs, and is not shown to be
+what crashed.
+
+For 534 it is on the worktree `/var/tmp/sunrpc-holdfix-534-tree` as
+`3c583ea8bbcd2` (on `87a87bd2d5be3`), built with `build-sunrpc.sh`
+into `/var/tmp/zc-run-logs/sunrpc-holdfix2-534/`: no warning but the
+compiler's version, 442 exports with no version changed; `sunrpc.ko`
+`94F9970EBA48D601405AD7A`.  It is in `updates/` (Mike: "put the
+hold-fix in updates, I'm willing to try it"), with `depmod -a`; the
+`6FB8AB5B…` it replaces is kept in
+`/var/tmp/zc-run-logs/holdfix2-install-534/`.  The running boot still
+has `6FB8AB5B…` loaded.  The initrd carries no `sunrpc.ko`.
+
+`updates/sunrpc.ko` is a hard link shared with four of perf's
+build-id cache entries (`~/.debug/.../updates/sunrpc.ko/<build-id>/elf`),
+so each `cp` into `updates/`, `swap-sunrpc.sh`'s included, rewrites
+them.  They now hold this module.  Mike does not need those four.
+
+The next boot is the one-shot entry `ofp-rocky-534-pstore.conf`:
+build 534's own entry with `efi_pstore.pstore_disable=0
+pstore.max_reason=2`, so that an oops is written to EFI variables
+before a panic hands over to kdump (which, with a crash kernel loaded,
+runs before pstore's panic dump).  After it, check
+`/sys/module/efi_pstore/parameters/pstore_disable` reads N and
+`/sys/module/pstore/parameters/backend` reads `efi`, and read
+`/sys/fs/pstore/` after any crash.
