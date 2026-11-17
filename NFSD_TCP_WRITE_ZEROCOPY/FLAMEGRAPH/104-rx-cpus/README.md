@@ -2631,3 +2631,15 @@ needs large skbs from the sender: iperf3 run forward from tardis2 with
 
 About to run (Mike: "yes, run it with -Z"): `ZC=1 iperf-tx.sh ab` as
 `t2-iperf-tx-2`: tardis2 sends forward with `-Z`, 16 streams a port.
+
+**`t2-iperf-tx-2`: 100.32 GB/s out of the two ports**
+([iperf-tx-2.out](iperf-tx-2.out)): 50.68 and 49.64 GB/s, no drop, no
+queue stop, a single transmit queue up to 17.80 GB/s, the senders 6%
+busy, the client 66% (6 of its CPUs over 90%).  **The card's transmit
+is not what holds READs at 72**: four queues a port carry 50 GB/s, and
+NFS's 9 GB/s a queue is half what one queue carries.  So the queues
+filling in r744 and the recycle is how a slower drain shows, not the
+card's limit.  Correction to `t2-iperf-tx-1` above: `xeu`'s "8 KiB a
+send, TSO 13%" reads the same here at 100 GB/s, so it is not the size
+of the stack's skbs and that run was not held by a packet rate; it was
+held by the reversed iperf3 server's copy.
