@@ -160,3 +160,11 @@ came from the server's page cache.  So t2-r859's 79.24 is helped by
 the write before it, and t2-r867's 80.39 is the cleaner figure.  At 10
 GB/s each the drives are under the 13 each local fio reached (104.58
 on the eight, round 104), but fully busy.
+
+**The READ pass's engine is io_uring with registered buffers** (Mike,
+17 November: "make io_uring with fixedbufs the READ pass's engine").
+`read-check.sh` exports `IOENGINE=io_uring` and `FIXEDBUFS=1` unless
+given others (`IOENGINE=libaio` for the old engine, `FIXEDBUFS=0` for
+io_uring without registered buffers); AGENTS.md's READ rule says so.
+Passes before t2-r867 are libaio's.  The WRITE pass and the strobes
+(`client-read.sh`, `ab.sh`) stay on libaio unless told.

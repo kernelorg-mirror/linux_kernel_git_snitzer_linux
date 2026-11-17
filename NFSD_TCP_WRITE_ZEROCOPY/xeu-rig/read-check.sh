@@ -26,6 +26,19 @@
 # the first fills them and marks every export, the next read them as
 # they are.  The trim leaves them (fstrim discards only free blocks).
 # KEEP_FILES=0 fills new files and deletes them after.
+#
+# fio reads on io_uring with registered buffers (Mike, 17 November:
+# "make io_uring with fixedbufs the READ pass's engine"; FLAMEGRAPH round
+# 107): its buffers are pinned once, so the NFS client no longer pins and
+# walks them for every READ, a quarter less of its submission and none
+# of its pinning.  The READ pass read 80.39 GB/s on it (t2-r867) against
+# 79.24 on libaio (t2-r859, after a write check, part from the server's
+# page cache).  Passes before t2-r867 are libaio's.  IOENGINE and
+# FIXEDBUFS override (IOENGINE=libaio for the old engine, FIXEDBUFS=0
+# for io_uring without registered buffers); the fill stays on libaio,
+# so the kept files hold either way.
+export IOENGINE=${IOENGINE:-io_uring}
+[ "$IOENGINE" = io_uring ] && export FIXEDBUFS=${FIXEDBUFS-1} || export FIXEDBUFS=
 cd "$(dirname "$0")" || exit 1
 . ./common.sh
 n=${1:?read-check.sh <run number>}

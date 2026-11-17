@@ -303,7 +303,10 @@ above) is checked with `xeu-rig/read-check.sh <n>` on the changed
 host at the settled setting: one two-port read run on all eight
 drives, fio reading 1 MiB at a time with the client's rsize at
 256 KiB (the drives' largest command, MDTS 6), `WARM=10 RUNTIME=40`
-after a trim and 120 s of rest. It passes at **71.5 GB/s or more**
+after a trim and 120 s of rest, **fio on io_uring with registered
+buffers since 17 November (Mike: "make io_uring with fixedbufs the
+READ pass's engine")**: 80.39 GB/s on it (t2-r867), passes before it
+on libaio.  The WRITE pass stays on libaio. It passes at **71.5 GB/s or more**
 with no new kernel warning; 71.0 to 71.49 is run once more (`RERUN`);
 below 71.0, or below 71.5 twice, is a regression, and is not kept
 unless Mike decides. **The mark was 73.0 until Mike relaxed it on 16
