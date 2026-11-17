@@ -465,7 +465,7 @@ for p in $PORTS; do job $p f $RUNTIME $WARM | clput /tmp/twoport-$p.fio; done
 # fill's sizes, so the read after it skips the fill (write-check.sh, then
 # read-check.sh).  A write that finds no valid marker, and any run without
 # KEEP_FILES, deletes the files and the markers after its load.
-for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' -e 's/^ioengine=.*/ioengine=libaio/' -e '/^fixedbufs=/d' > fill-$p.fio; done	# the fill always on libaio, so its marker holds whatever IOENGINE a run reads with
+for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' -e 's/^ioengine=.*/ioengine=libaio/' -e '/^fixedbufs=/d' -e 's/^iodepth=.*/iodepth=16/' > fill-$p.fio; done	# the fill always on libaio at iodepth 16, so its marker holds whatever IOENGINE and IODEPTH a run reads with
 FILLSUM=$(cat $(for p in $PORTS; do echo fill-$p.fio; done) | md5sum | cut -c1-32)
 filled=1
 for p in $PORTS; do for fs in ${FS[$p]}; do
