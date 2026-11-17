@@ -110,20 +110,6 @@ config SUNRPC_SVC_RTC_KUNIT_TEST
 
 	  For more information, see Documentation/dev-tools/kunit/.
 
-config SUNRPC_REPLY_PAGES_KUNIT_TEST
-	tristate "KUnit tests for the SUNRPC reply page recycle" if !KUNIT_ALL_TESTS
-	depends on KUNIT && SUNRPC
-	default KUNIT_ALL_TESTS
-	help
-	  Build tests for the recycling of sent TCP replies' pages
-	  (svc_tcp_reply_recycle): which replies are recycled, and that a
-	  completed send's pages fill the sending CPU's next request, with
-	  a full cache freeing them and a still-referenced page let go.
-	  These tests are intended for kernel developers and are not
-	  useful in a production kernel.
-
-	  For more information, see Documentation/dev-tools/kunit/.
-
 config SUNRPC_CACHE_KUNIT_TEST
 	tristate "KUnit tests for the SUNRPC cache refresh path" if !KUNIT_ALL_TESTS
 	depends on KUNIT && SUNRPC
