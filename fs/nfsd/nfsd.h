@@ -59,29 +59,40 @@ extern atomic_t			nfsd_th_cnt;		/* number of available threads */
 extern const struct seq_operations nfs_exports_op;
 
 /*
- * One cached export per nfsd thread, for NFSv3 requests from an AUTH_SYS
- * or AUTH_NULL client.  The slot holds its own reference on one
- * svc_expkey and on the svc_export it resolves to; a request whose key
- * matches borrows that export for the life of its svc_fh instead of
- * looking it up and taking and dropping shared references.
- *
- * @lock guards @borrowed and @dead.  While @borrowed is set only the owner
- * thread reads or changes the key and the pair; while it is clear only
- * a drain, under @lock, may move them out.  See export.c.
+ * One cached export: a key and the slot's own reference on the
+ * svc_expkey it found and on the svc_export that resolves to.
  */
-struct nfsd_exp_slot {
-	spinlock_t		lock;		/* guards borrowed, dead */
-	bool			borrowed;	/* an export is lent out */
-	bool			dead;		/* drained while borrowed */
-	bool			enabled;	/* a thread's or rtc rqst's slot */
-	bool			registered;	/* on the drain list (owner) */
-	u8			fsid_type;
-	u32			fsid[6];
+struct nfsd_exp_slot_ent {
+	u64			used;		/* the slot's clock at last use */
 	struct net		*net;
 	struct auth_domain	*client;	/* compared only; ek pins it */
 	struct cache_detail	*ekcd;
 	struct svc_expkey	*ek;
 	struct svc_export	*exp;
+	u32			fsid[6];
+	u8			fsid_type;
+};
+
+/*
+ * The exports an nfsd thread has cached, for NFSv3 requests from an
+ * AUTH_SYS or AUTH_NULL client: up to @nr entries, the least recently
+ * used replaced on a miss.  A request whose key matches one borrows that
+ * export for the life of its svc_fh instead of looking it up and taking
+ * and dropping shared references.
+ *
+ * @lock guards @borrowed and @dead.  While @borrowed is set only its
+ * holder (the owner thread, or a drain that claimed an idle slot) reads
+ * or changes the entries.  See export.c.
+ */
+struct nfsd_exp_slot {
+	spinlock_t		lock;		/* guards borrowed, dead */
+	bool			borrowed;	/* the entries are claimed */
+	bool			dead;		/* drained while borrowed */
+	bool			enabled;	/* a thread's or rtc rqst's slot */
+	bool			registered;	/* on the drain list (owner) */
+	unsigned int		nr;		/* entries in @ent */
+	u64			clock;		/* bumped on every hit and fill */
+	struct nfsd_exp_slot_ent *ent;
 	struct list_head	link;
 };
 
