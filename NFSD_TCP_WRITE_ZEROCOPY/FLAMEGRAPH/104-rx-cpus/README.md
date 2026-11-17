@@ -2613,3 +2613,6 @@ drain.  Whether four queues a port carry more than about 37 GB/s out is
 unmeasured: `xeu-rig/iperf-tx.sh ab` (written 16 November, never run)
 measures it without NFS or drives.  If they do not, 80 GB/s of READs
 is past the card's transmit, whatever the server does.
+
+About to run (Mike: "yes, run iperf-tx.sh ab"): `iperf-tx.sh ab` as
+`t2-iperf-tx-1`, 16 streams a port, 20 s, through `step.sh`.
