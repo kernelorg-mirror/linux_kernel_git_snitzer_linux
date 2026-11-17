@@ -336,3 +336,12 @@ Swapped at 23:05 (`/var/tmp/zc-run-logs/541/steps.log`): sunrpc
 per-CPU pools; `settled.sh apply` put it back on `pernode`, 512
 threads on 8-55, and ends in "the settled setting", no BAD item, no new
 kernel warning, kdump armed.  No WRITE or READ pass has run on it yet.
+
+The passes on it (client build 541): WRITE t2-r915 74.91 GB/s (RERUN),
+t2-r917 **75.25, PASS** at the mark of 75.0 (WRITE.md, TODO 2), no
+drive stepped down, no new kernel warning; READ t2-r916 **79.65 GB/s,
+PASS** (io_uring with registered buffers, rsize 256 KiB), no new
+kernel warning, the drives 9.7 to 10.1 GB/s each at 99 to 100% busy.
+Against the frame: the drives read 104.58 GB/s with local fio and the
+ports send 98.31 with iperf3 `-Z`, so NFS reads at 76% of the drives
+and 81% of the wire; the pass measures no memory or Send-Q.
