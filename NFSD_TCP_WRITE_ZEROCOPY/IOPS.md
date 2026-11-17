@@ -148,6 +148,20 @@ largest self costs.
      eight at 16, which is what patch 27 is for;
    - libaio against io_uring, for the inline first leg;
    - xprtiod `affinity_scope` cpu, if the profile points there;
+   - **the server's `sunrpc.pool_mode`, `auto` against `pernode`**
+     (Mike, 17 November).  David's instructions leave it at its default,
+     `auto`, and in his tree `auto` always means per-CPU pools
+     (`2464b0d42380a`, "SUNRPC: per-cpu svc pools, sibling wake and
+     steal, adaptive idle spin"): his 192-CPU server ran 192 pools.
+     `settled.sh` holds `pernode` since 6 November (Mike: per-CPU pools
+     cost WRITEs on builds 512 and 514, about 43k nfsd cycles a loaned
+     WRITE, copy mode 7% slower), which on tardis2's one NUMA node is
+     one pool, 768 threads under `settled-iops.sh`.  The A/B is
+     `EXP_POOL_MODE=auto` under `settled-iops.sh` (64 pools of 12),
+     which `settled.sh` applies by restarting nfs-server.  It is for
+     IOPS: the settled `pernode` changes only with a WRITE pass and
+     Mike's word.  The client's `pool_mode` plays no part (its RPCs use
+     no svc pool);
    - his IRQ placement.
 4. Each round's README records its WRITE pass and READ pass, as the hard
    rules in AGENTS.md ask of any change to a path they take.  A
