@@ -57,6 +57,19 @@ W=$(( SECS - 8 )); sleep 5
 declare -A F0 T0 B0
 for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); txrings $d > /tmp/.iperf-tx-$p.0; done
 echo 1 > $RG
+# PROBE=<file.bt> OUT=<dir>: the probe in the window, into $OUT/<name>.txt,
+# and 25 samples 0.2 s apart of every transmit queue's BQL limit and bytes
+# in flight, into $OUT/bql.txt
+if [ -n "${PROBE:-}" ]; then
+	mkdir -p ${OUT:?OUT with PROBE}
+	bpftrace -q $PROBE > $OUT/$(basename $PROBE .bt).txt 2>&1 &
+	for k in $(seq 25); do
+		for d in ${DEV[a]} ${DEV[b]}; do for q in /sys/class/net/$d/queues/tx-*; do
+			echo "$k $d ${q##*/} limit $(cat $q/byte_queue_limits/limit) inflight $(cat $q/byte_queue_limits/inflight)"
+		done; done
+		sleep 0.2
+	done > $OUT/bql.txt &
+fi
 mpstat -P ALL $W 1 > /tmp/.iperf-tx-mpstat 2>&1 &
 # the client receiving: its CPUs, and its ports' receive drops (dropped
 # and missed, as ip -s link counts them)

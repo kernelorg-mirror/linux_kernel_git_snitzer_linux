@@ -2689,3 +2689,6 @@ the probe's 5 s; "txc" are the eight odd ring CPUs (40 CPU-seconds),
 
 Next: the same BQL samples and skb transmit-to-consume under iperf3
 `-Z`, and the skbs' shape (bytes, frags, segment size) in both.
+
+About to run, through `step.sh`: `ZC=1 PROBE=skbshape.bt iperf-tx.sh ab` as
+`t2-iperf-tx-3`, then `PROBE=skbshape txdrain.sh 813 N` and `814 Y`.

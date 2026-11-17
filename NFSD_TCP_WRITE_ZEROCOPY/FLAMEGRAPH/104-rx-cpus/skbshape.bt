@@ -1,0 +1,43 @@
+/*
+ * skbshape.bt: what the stack hands the driver (round 104, 17 November,
+ * the queues' drain): for every skb of 1000 bytes or more, its bytes, its
+ * linear head, its frags and their mean size, the first frag's size and
+ * offset in its page, its segment size and segments, and the skb's time
+ * from the driver's transmit to its consume (one in 16 by address).  BQL's
+ * in flight is sampled from sysfs beside it.  5 s.
+ */
+tracepoint:net:net_dev_start_xmit /args.len >= 1000/
+{
+	$skb = (struct sk_buff *)args.skbaddr;
+	$sh = (struct skb_shared_info *)($skb->head + $skb->end);
+	$nf = $sh->nr_frags;
+	@len_kib = hist(args.len / 1024);
+	@len_stats = stats(args.len);
+	@head_bytes = stats($skb->len - $skb->data_len);
+	@nr_frags = hist($nf);
+	@nr_frags_stats = stats($nf);
+	if ($nf > 0) {
+		@frag_mean_bytes = stats($skb->data_len / $nf);
+		@frag0_bytes = hist($sh->frags[0].len);
+		@frag0_offset_nonzero = stats($sh->frags[0].offset != 0 ? 1 : 0);
+	}
+	@gso_size = stats($sh->gso_size);
+	@gso_segs = stats($sh->gso_segs);
+	if ((((uint64)args.skbaddr >> 8) & 15) == 0) {
+		@t[(uint64)args.skbaddr] = nsecs;
+	}
+}
+
+tracepoint:skb:consume_skb /@t[(uint64)args.skbaddr]/
+{
+	$us = (uint64)(nsecs - @t[(uint64)args.skbaddr]) / 1000;
+	@xmit_to_consume_us = hist($us);
+	@xmit_to_consume_stats = stats($us);
+	delete(@t[(uint64)args.skbaddr]);
+}
+
+interval:s:5
+{
+	clear(@t);
+	exit();
+}
