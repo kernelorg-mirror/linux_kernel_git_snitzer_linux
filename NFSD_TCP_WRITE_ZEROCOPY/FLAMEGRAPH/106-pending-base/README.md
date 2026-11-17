@@ -351,3 +351,10 @@ New kernel warnings 0 in each.
   fits the cache.
 - 1 MiB again: 73.59 against t2-r850's 75.18, memory 0.76 against 0.74.
 - 1.5 MiB to run again for its spread (Mike), `ab.sh 857:1572864:16`.
+
+**1.5 MiB again, t2-r857: 78.88 GB/s**, DMA 157.8, memory 78.2 GB/s,
+0.99 a byte, cache fills 90.4, not sent 0.15 MB, below TCP 0.08 MB and
+Send-Q 0.33 MB a socket, held 13 MB, waiting for the NIC 7 MB, cycles a
+KiB 461 / 157 / 619, held back 4889515, new kernel warnings 0.  Within
+0.2% of t2-r854, at the same memory a byte.  The story of the row and
+what each field means is a claude.ai page, "NFSD Read Promised Count".
