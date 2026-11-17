@@ -129,3 +129,14 @@ the bound from its admission, so that queued plus in flight stays under
 it.  Before the code, an A/B on the pending base to show the lever:
 the bound at 256 and 128 KiB, and nconnect 12 (24 sockets, as settled),
 each set beside t2-r842 in the frame, memory a byte first.
+
+## The A/B: what the server holds
+
+Mike: "yes, run the A/B".  [ab.sh](ab.sh) runs the pending base's strobe
+with the bound and nconnect given, and prints each run as a row of the
+frame with the replies held at the server in all.  About to run,
+through `xeu-rig/step.sh /var/tmp/zc-run-logs/r106 ab ...`: `ab.sh
+843:524288:16 844:262144:16 845:131072:16 846:524288:12`: the pending
+base again (unprofiled), the bound at 256 and 128 KiB, and nconnect 12
+(24 sockets, as settled), the last run last since a different
+nconnect may fill the files again.
