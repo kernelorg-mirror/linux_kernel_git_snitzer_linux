@@ -2735,3 +2735,20 @@ About to run (Mike: "try a lower BQL limit at N"), through `step.sh`:
 [bql-strobe.sh](bql-strobe.sh) `817 393216`: every transmit queue's BQL
 `limit_max` at 384 KiB (it ran 237 to 828 KiB in flight at N, r815),
 put back after.
+
+**t2-r817, BQL `limit_max` 384 KiB at N: 71.78 GB/s**, no new kernel
+warning, the limit put back and settled after.  Beside it, cycles a KiB
+sent from each run's `perf-stat-window.txt` (cycles over the 10 s
+window, by CPU group; Mike: "cycles is also worth measuring"):
+
+| run | GB/s | memory bytes a byte | BQL in flight a queue, KiB | transmit to consume | cycles a KiB: work items / rings / all |
+|---|---|---|---|---|---|
+| `t2-r815`, N, default | 73.02 | 1.60 | 237 to 828 | 48 us | 382 / 207 / 589 |
+| `t2-r817`, N, 384 KiB | 71.78 | 1.56 | 113 to 269 | 26 us | 366 / 226 / 592 |
+| `t2-r816`, Y, default | 67.69 | 1.94 | 786 to 933 | 102 us | 390 / 235 / 625 |
+
+The cap halved the queues' depth and an skb's wait, and moved memory
+2.5% and the cycles not at all (4% off the work items, 9% onto the
+rings): inside what one run of each can tell apart.  The client's
+mountstats show the paired connections again: the transports with 52k
+to 78k sends against 115k to 124k, 55 to 59 READs pending against 46.
