@@ -1646,7 +1646,8 @@ static int svc_rtc_pick_least(const void *key, const struct cpumask *node,
  * themselves; they leave the rx mask and the connection's CPU alone.
  *
  * Marks @rx_cpu in @serv's rx mask, testing first so that the steady
- * state stores nothing.  A connection keeps its CPU while that CPU is
+ * state stores nothing, unless svc_rtc_cpus names it: a receive on a work
+ * CPU was steered there.  A connection keeps its CPU while that CPU is
  * online and takes no receives.  It is (re)picked by svc_rtc_pick_cpu(),
  * or with svc_rtc_balance by svc_rtc_pick_least(), on the first
  * receive, after its CPU went offline, and when its CPU has since taken
@@ -1668,7 +1669,14 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 
 	if (!softirq)
 		return cpu;
-	if (!cpumask_test_cpu(rx_cpu, serv->sv_rtc_rxcpus))
+	/*
+	 * A CPU named in svc_rtc_cpus is one the work items are meant to run
+	 * on.  A receive there was steered to it (RPS or RFS hands a flow's
+	 * frames to the CPU that last sent on it, the work item's), so it is
+	 * not marked: marking it would take it out of the placement for good.
+	 */
+	if (!cpumask_test_cpu(rx_cpu, serv->sv_rtc_rxcpus) &&
+	    !(allowed && cpumask_test_cpu(rx_cpu, allowed)))
 		cpumask_set_cpu(rx_cpu, serv->sv_rtc_rxcpus);
 	if (cpu >= 0 && cpu_online(cpu) &&
 	    (cpu == rx_cpu || !cpumask_test_cpu(cpu, serv->sv_rtc_rxcpus)) &&
