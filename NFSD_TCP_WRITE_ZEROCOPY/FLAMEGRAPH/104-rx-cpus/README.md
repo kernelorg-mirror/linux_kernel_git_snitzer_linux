@@ -2465,3 +2465,27 @@ installed module's.
 `swap-sunrpc.sh` to it, `settled.sh apply`, then `ab-recycle.sh` with
 the locked READ pass, `792:0`, `793:512`, `794:0`, `795:512`, and
 `WRITE=1 ab-recycle.sh 796:512`.
+
+### t2-r792 and r793: the chain removes the small skbs, not the backup
+
+| run | recycle | GB/s | "copied" sends | below TCP a socket (`skmem` t) | context switches a second | drives |
+|---|---|---|---|---|---|---|
+| `t2-r792` | 0 | **72.88, PASS** | | 0 to 1.6 MB | 52 k | 100% busy, 8.6 to 9.6 GB/s |
+| `t2-r793` | 512, chain | **64.86, FAIL** | 0 | 3.0 to 3.8 MB | 177 k | 96 to 97%, 7.9 to 8.3 |
+| `t2-r782` | 512, no chain | 62.46 | 19.6% | 2.5 to 3.7 MB | 387 k | 95%, 7.6 to 8.0 |
+
+No new kernel warning.  r793: 12.4 M replies, 97.2% of their pages
+reused, 50 let go referenced.  The chain did what it was written for: no
+send is "copied" any more (the small tail skbs are gone) and the rate
+gained 2.4 GB/s, but the sockets' data still waits below TCP as before.
+So the small skbs were a cost, not the cause, and `c7fefbfe46f2a`'s
+message says they were: to be reworded once the cause is known.  Mike
+stopped the A/B ("stop, need to understand why"): r794 was stopped in
+its rest before its load (the stop file, then its processes by hand),
+r795 and r796 did not run.
+
+**Next** (Mike: "yes, run 0, 1 and 512"): the recycle at 1 page a CPU
+keeps the zero-copy send but frees each reply's pages at completion as
+before, the cache always full.  `ab-recycle.sh 797:0 798:1 799:512`
+(the locked READ pass): if 1 is as slow as 512, the zero-copy send is
+the cause; if as fast as 0, the recycled pages are.
