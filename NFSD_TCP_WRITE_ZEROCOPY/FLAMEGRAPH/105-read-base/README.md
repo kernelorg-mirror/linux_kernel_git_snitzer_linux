@@ -435,3 +435,13 @@ loaded: tardis2 runs `94F9970EBA48D601405AD7A`, bound 0.  To try it:
 `swap-sunrpc.sh /var/tmp/zc-run-logs/sunrpc-nospace-534` with no client
 connected, `settled.sh apply`, the WRITE and READ passes at bound 0,
 then `ab.sh` with the bound at 0, 1 MiB and 512 KiB again.
+
+### The write-space fix on the rig (17 November, about 07:20)
+
+Mike: "swap it in and run the passes and A/B".  About to run, each
+through `xeu-rig/step.sh /var/tmp/zc-run-logs/t2-nospace-534 NAME ...`:
+`swap` (`swap-sunrpc.sh /var/tmp/zc-run-logs/sunrpc-nospace-534`,
+sunrpc `AF720978447140137AFC2FE` after), `settled` (`settled.sh
+apply`), `write-check.sh 834`, `read-check.sh 835` (the first with
+`KEEP_FILES`: it fills), then `ab.sh 836:262144:0 837:262144:1048576
+838:262144:524288`, with `rtc_stats` saved before and after each.
