@@ -146,6 +146,10 @@
 NFSD_CPUSET=8-55
 NFSD_THREADS=512
 NFSD_POOLS=512	# one pool: pools_per_node was dropped from the series on 15 October
+# EXP_NFSD_THREADS holds a run (and apply) to another thread count, in the
+# one pool (settled-iops.sh: David Flynn's 768 for 4 KiB READ IOPS).
+NFSD_THREADS_SETTLED=$NFSD_THREADS
+[ -n "${EXP_NFSD_THREADS:-}" ] && NFSD_THREADS=$EXP_NFSD_THREADS && NFSD_POOLS=$EXP_NFSD_THREADS
 # With David's per-CPU pools (canary 3fe6000275d8) "auto" is one pool per
 # online CPU, and the threads are spread evenly over them: on tardis2, 64
 # pools of 8.  Any other pool_mode keeps one pool of NFSD_POOLS.
@@ -494,6 +498,17 @@ declare -A SYSCTL=(
 [ $HOST = tardis2 ] && SYSCTL[net.ipv4.tcp_limit_output_bytes]=262144
 TCP_LOB_SETTLED=${SYSCTL[net.ipv4.tcp_limit_output_bytes]}
 [ -n "${EXP_TCP_LOB:-}" ] && SYSCTL[net.ipv4.tcp_limit_output_bytes]=$EXP_TCP_LOB
+# EXP_SYSCTL holds a run (and apply) to other values of any of the sysctls
+# above, as "name=value;name=value" (settled-iops.sh: David Flynn's socket
+# buffers).  Each one that differs is named in the audit's OFF.
+declare -A SYSCTL_SETTLED; for k in "${!SYSCTL[@]}"; do SYSCTL_SETTLED[$k]=${SYSCTL[$k]}; done
+if [ -n "${EXP_SYSCTL:-}" ]; then
+	IFS=';' read -ra _xs <<< "$EXP_SYSCTL"
+	for _x in "${_xs[@]}"; do
+		[ -n "${SYSCTL[${_x%%=*}]+y}" ] || { echo "EXP_SYSCTL: ${_x%%=*} is not a sysctl settled.sh holds"; exit 2; }
+		SYSCTL[${_x%%=*}]=${_x#*=}
+	done
+fi
 # The client's, read over its management address and never changed from
 # here ("the client untouched"): what bears on how it receives and sends.
 declare -A CLI_SYSCTL=(
@@ -638,6 +653,11 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
 	[ -n "${EXP_TCP_LOB:-}" ] && [ "$EXP_TCP_LOB" != "$TCP_LOB_SETTLED" ] && OFF="$OFF tcp_limit_output_bytes=$EXP_TCP_LOB"
+	[ "$NFSD_THREADS" != "$NFSD_THREADS_SETTLED" ] && OFF="$OFF nfsd_threads=$NFSD_THREADS"
+	for k in $(printf '%s\n' "${!SYSCTL[@]}" | sort); do
+		[ $k = net.ipv4.tcp_limit_output_bytes ] && continue
+		[ "${SYSCTL[$k]}" = "${SYSCTL_SETTLED[$k]}" ] || OFF="$OFF $k=${SYSCTL[$k]// /,}"
+	done
 	[ -n "${EXP_RODATA:-}" ] && [ "$EXP_RODATA" != "$RODATA" ] && OFF="$OFF rodata=$EXP_RODATA"
 	[ -n "${EXP_RX_REGION_STACK:-}" ] && [ "$EXP_RX_REGION_STACK" != "$RX_REGION_STACK" ] && OFF="$OFF rx_region_stack=$EXP_RX_REGION_STACK"
 	[ -n "${EXP_REGION_PAGES:-}" ] && [ "$EXP_REGION_PAGES" != "$REGION_PAGES" ] && OFF="$OFF region_pages=$EXP_REGION_PAGES"
