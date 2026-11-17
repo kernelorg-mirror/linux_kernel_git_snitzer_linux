@@ -35,3 +35,11 @@ round's change.
 About to run, through `xeu-rig/step.sh /var/tmp/zc-run-logs/r106 NAME
 ...`: `prof.sh 841 settled`, then `prof.sh 842 pending`, on the same
 kernel and module, the files kept between them.
+
+`settled.sh apply` (bound 0) ended in "the settled setting".  Then
+`pending-settled.sh audit rest` on that host found exactly the pending
+items off, and nothing else: `svc_rtc_balance` N (want Y),
+`svc_rtc_send_max` 0 (want 524288), `tcp_limit_output_bytes` 4194304
+(want 262144), and every receive queue's RPS and RFS flows and the RFS
+table (want nfsd's CPUs, 4096 and 32768).  The profiles started at
+07:54.
