@@ -2513,3 +2513,38 @@ script a running step is reading.)
 
 Next: `STROBE=1 ab-recycle.sh 800:0 809:1 810:512` (801 to 808 stay the
 next boot's).  The first fills the files; the two after it read them.
+
+### t2-r800, r809, r810: the recycled pages are the cause; the recycle is dropped
+
+`STROBE=1 ab-recycle.sh 800:0 809:1 810:512` (the quick strobe, files
+written once by r800 and kept):
+
+| run | recycle | GB/s | drives a / b, each | server Send-Q | TCP's RTT |
+|---|---|---|---|---|---|
+| `t2-r800` | 0 | 70.54 | 9.0 / 8.6, 100% busy | 0.58 MB | 0.22 ms |
+| `t2-r809` | 1 | 68.64 | 8.6 / 8.6, 100% busy | 0.44 MB | 0.18 ms |
+| `t2-r810` | 512 | 61.88 | | | |
+
+At 1 every reply went out zero copy (7.85 M) and every page was freed at
+completion (133.5 M "over"), and nothing backed up: the drives set the
+figure, as at 0.  So the zero-copy send is not the cause; handing the
+same pages back is.  Why the NIC drains recycled pages more slowly (the
+SMMU, or a page the drive has just written) was not looked into.  The
+zero-copy send alone took about a tenth less of the rtc CPUs' time a
+GB/s (0.50% against 0.55%) and no more of the rings', from one pair, with
+the drives the limit: not kept on its own.  r810 was not needed (r809
+had answered) and ran anyway.
+
+At 0 the figure is the drives': in every run at 0 all eight were 100%
+busy and the total is the sum of their rates, 9.0 to 9.6 GB/s each on
+port a and 7.5 to 9.2 on port b (Mike: "at 70.54 GB/s it too was quite
+low, rather than around 73+").
+
+**Dropped (Mike: "drop the recycle")**: the five commits are
+`patches/dropped/0020` to `0024`, removed at the tip in group order
+(`41e976aac7f02` the config, `494f5d965f521` the tests, `7c8f833529694`
+the interface, `202597f98391d` the code; `net/sunrpc` and the configs
+are as before `80e7a8cafad0a`, built).  tardis2 is back on
+`sunrpc-nosplit-534` (`67376EA89E652240AB9F1E1`), settled.  The read
+files r800 wrote are still on the drives with their marker; the next
+run without `KEEP_FILES=1` writes them anew and deletes them.

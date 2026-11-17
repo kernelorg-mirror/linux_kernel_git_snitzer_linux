@@ -1,0 +1,100 @@
+From 73d9333fe9116e2d48066cea027f3b80f15a2019 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 16 Nov 2026 23:04:14 +0000
+Subject: [PATCH] SUNRPC: expose the reply page recycle for the KUnit suites
+
+Export svc_reply_pages_fill() and svc_reply_tx_take() to KUnit, with
+helpers to set svc_tcp_reply_recycle as its parameter would, to read
+the pages a CPU's cache holds, and to read the recycle's counters.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ net/sunrpc/svc_reply_pages.c | 44 ++++++++++++++++++++++++++++++++++++
+ net/sunrpc/svc_reply_pages.h | 14 ++++++++++++
+ 2 files changed, 58 insertions(+)
+
+diff --git a/net/sunrpc/svc_reply_pages.c b/net/sunrpc/svc_reply_pages.c
+index 921a1bceee33a..9006e718a0f6b 100644
+--- a/net/sunrpc/svc_reply_pages.c
++++ b/net/sunrpc/svc_reply_pages.c
+@@ -39,6 +39,7 @@
+ #include <linux/sunrpc/svc.h>
+ #include <net/rx_loan.h>
+ #include <linux/delay.h>
++#include <kunit/visibility.h>
+ 
+ #include "svc_reply_pages.h"
+ 
+@@ -473,3 +474,46 @@ void svc_reply_pages_exit(void)
+ 	shrinker_free(svc_reply_shrinker);
+ 	svc_reply_trim_all();
+ }
++
++#if IS_ENABLED(CONFIG_KUNIT)
++EXPORT_SYMBOL_IF_KUNIT(svc_reply_pages_fill);
++EXPORT_SYMBOL_IF_KUNIT(svc_reply_tx_take);
++
++/* Set svc_tcp_reply_recycle as its parameter would; return the old value. */
++unsigned int svc_reply_kunit_set(unsigned int pages)
++{
++	unsigned int old = READ_ONCE(svc_reply_recycle);
++
++	WRITE_ONCE(svc_reply_recycle, pages);
++	if (!pages)
++		svc_reply_trim_all();
++	return old;
++}
++EXPORT_SYMBOL_IF_KUNIT(svc_reply_kunit_set);
++
++/* Pages @cpu's cache holds. */
++unsigned int svc_reply_kunit_cached(int cpu)
++{
++	return atomic_read(&per_cpu_ptr(&svc_reply_cache, cpu)->pages);
++}
++EXPORT_SYMBOL_IF_KUNIT(svc_reply_kunit_cached);
++
++/* The counters, summed over the CPUs. */
++void svc_reply_kunit_stats(struct svc_reply_kunit_stats *k)
++{
++	int cpu;
++
++	memset(k, 0, sizeof(*k));
++	for_each_possible_cpu(cpu) {
++		const struct svc_reply_stats *p =
++			per_cpu_ptr(&svc_reply_stats, cpu);
++
++		k->sends += READ_ONCE(p->sends);
++		k->reused += READ_ONCE(p->reused);
++		k->busy += READ_ONCE(p->busy);
++		k->over += READ_ONCE(p->over);
++		k->live += READ_ONCE(p->live);
++	}
++}
++EXPORT_SYMBOL_IF_KUNIT(svc_reply_kunit_stats);
++#endif
+diff --git a/net/sunrpc/svc_reply_pages.h b/net/sunrpc/svc_reply_pages.h
+index c07d2a376f16d..d1250139df39f 100644
+--- a/net/sunrpc/svc_reply_pages.h
++++ b/net/sunrpc/svc_reply_pages.h
+@@ -30,4 +30,18 @@ struct svc_reply_tx *svc_reply_tx_take(struct svc_rqst *rqstp,
+ int svc_reply_pages_init(void);
+ void svc_reply_pages_exit(void);
+ 
++#if IS_ENABLED(CONFIG_KUNIT)
++struct svc_reply_kunit_stats {
++	unsigned long	sends;
++	unsigned long	reused;
++	unsigned long	busy;
++	unsigned long	over;
++	long		live;
++};
++
++unsigned int svc_reply_kunit_set(unsigned int pages);
++unsigned int svc_reply_kunit_cached(int cpu);
++void svc_reply_kunit_stats(struct svc_reply_kunit_stats *k);
++#endif
++
+ #endif /* _NET_SUNRPC_SVC_REPLY_PAGES_H */
+-- 
+2.52.0
+

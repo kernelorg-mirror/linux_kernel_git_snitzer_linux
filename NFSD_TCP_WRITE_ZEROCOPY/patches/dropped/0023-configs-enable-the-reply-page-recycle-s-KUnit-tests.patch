@@ -1,0 +1,24 @@
+From eb6d49b036b7f787c873ce826eada3b91cfccc44 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Mon, 16 Nov 2026 23:05:36 +0000
+Subject: [PATCH] configs: enable the reply page recycle's KUnit tests
+
+Build SUNRPC_REPLY_PAGES_KUNIT_TEST as a module, as the other sunrpc
+suites are, so dist-srpm finds it set.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ .../configs/common/generic/CONFIG_SUNRPC_REPLY_PAGES_KUNIT_TEST  | 1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 redhat/configs/common/generic/CONFIG_SUNRPC_REPLY_PAGES_KUNIT_TEST
+
+diff --git a/redhat/configs/common/generic/CONFIG_SUNRPC_REPLY_PAGES_KUNIT_TEST b/redhat/configs/common/generic/CONFIG_SUNRPC_REPLY_PAGES_KUNIT_TEST
+new file mode 100644
+index 0000000000000..b52bb4d5cbfd3
+--- /dev/null
++++ b/redhat/configs/common/generic/CONFIG_SUNRPC_REPLY_PAGES_KUNIT_TEST
+@@ -0,0 +1 @@
++CONFIG_SUNRPC_REPLY_PAGES_KUNIT_TEST=m
+-- 
+2.52.0
+

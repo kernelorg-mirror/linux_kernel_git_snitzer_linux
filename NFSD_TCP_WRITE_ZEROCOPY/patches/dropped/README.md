@@ -250,3 +250,26 @@ not: 35 a socket at 8 against 31 at 1.  The passes went from 2.7 M to
 round trip on the wire (0.17 to 0.67 ms) and tripled the replies
 waiting to be sent: the two-port READ strobe read 61.82 and 62.03 GB/s
 at 8 against 71.05 at 1 (t2-r775 to r777).
+
+`0020-SUNRPC-Recycle-a-TCP-reply-s-pages-on-the-CPU-that-s.patch` to
+`0024-SUNRPC-Let-consecutive-recycled-replies-share-skbs.patch`
+(FLAMEGRAPH round 104, 16 and 17 November, dropped by Mike) are
+`sunrpc.svc_tcp_reply_recycle`: a large TCP reply sent zero copy under
+a descriptor holding the rqst's reply pages, its completion giving them
+back to the sending CPU's cache for `svc_alloc_arg()` (`0020`,
+`80e7a8cafad0a`), its KUnit interface and suite and the suite's config
+(`0021` to `0023`), and a `link_skb` so consecutive replies share skbs
+(`0024`, `c7fefbfe46f2a`).  They applied on `kernel-7.3/canary` after
+`a7e5a1b76d046`'s tree (with David Flynn's READ-confinement set); the
+build-534 port is `FLAMEGRAPH/104-rx-cpus/reply-recycle-534.diff`.  It
+removed the zone-lock contention it was written for (the rtc CPUs'
+spinning from 9% of their samples to 1.3%) and reused 96 to 97% of the
+pages, but with recycled pages every NIC transmit queue sat at its byte
+limit, the sockets' data backed up below TCP, TSQ stopped them and the
+work items slept in `sendmsg()`: the two-port READ read 62 to 65 GB/s at
+512 pages a CPU against 70 to 74 without it (t2-r781 to r810).  At 1
+page a CPU (the zero-copy send with every page freed as before) nothing
+backed up (t2-r809), so the recycled pages, not the send, were the
+cause; why the NIC drains recycled pages more slowly was not found.
+`0024`'s message names the small tail skbs as the cause: the chain
+removed those (t2-r793) and the backup stayed, so that message is wrong.
