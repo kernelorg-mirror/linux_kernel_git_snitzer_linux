@@ -2413,3 +2413,55 @@ transmits (`tcp_tsq_handler()`) by CPU group; with
 [bqlsample.sh](bqlsample.sh) beside it, each transmit queue's BQL limit
 and inflight five times in the load.  And `xeu`'s transmit path read
 from its source.  (The next boot's runs move on again, from 801.)
+
+### t2-r790 and r791: the NIC's queues sit at their limit
+
+[txq.bt](txq.bt) and [bqlsample.sh](bqlsample.sh), `probe-recycle.sh 790
+512 txq` and `791 0 txq`:
+
+| | `t2-r790`, recycle 512 | `t2-r791`, recycle 0 |
+|---|---|---|
+| GB/s (with the probe) | 62.22 | 69.99 |
+| skbs sent from the rtc CPUs (the work item's `sendmsg()`) | 1.19 M, 20% | 5.25 M, 83% |
+| skbs sent from the ring CPUs (ACKs, TSQ) | 4.72 M, 80% | 1.04 M, 17% |
+| `tcp_tsq_handler()` calls, ring CPUs | 1.61 M | 1.36 M |
+| bytes an skb (1000 or more), mean | 52.5 K | 55.4 K |
+| BQL in flight, each of the 8 queues (limit about 1.04 MB) | 0.89 to 1.05 MB | 0.07 to 0.67 MB |
+
+At 512 every transmit queue of both ports is held at its byte limit: 1 MB
+a queue drained at 7.8 GB/s is the 128 us from transmit to completion
+r788 measured, so that time is the queues' depth.  The NIC drains these
+skbs at 31 GB/s a port from full queues, where at 0 it carried 35 from
+queues a third full; the qdisc backs up behind BQL, TSQ stops the
+sockets, their send buffers fill, and the work item's `sendmsg()` sleeps:
+ACKs on the ring CPUs then clock out four skbs in five.
+
+`xeu`'s source (`kmod-xsight-2.0.1` with the 16 patches of
+`kernel-rpmtree/xsight/xsight.spec`, unpacked in the scratchpad):
+`xeu_start_xmit()` and `xeu_tx_poll()` never look at whether an skb is
+zero copy.  So the difference is the skbs' shape.  The one known: an skb
+carries one `ubuf_info`, so a recycled reply's data cannot join the skb
+that carries the reply before it.  TCP starts a new skb at each reply,
+whose last bytes go out in a small skb behind the next reply's spliced
+marker: four full segments and a small one a reply, where spliced
+replies run on as one stream in full segments.
+
+**The fix** (Mike: "go straight to the link_skb fix and A/B it"):
+`c7fefbfe46f2a` "SUNRPC: Let consecutive recycled replies share skbs":
+a `link_skb` for `svc_reply_tx`, after David's `rx_loan_tx_link_skb()`.
+A reply whose data lands on an skb carrying an earlier reply's joins
+that reply's chain (at most 32), holding a reference on the chain's
+head, and the head releases every member when the last skb carrying any
+of them is freed.  (A marker spliced onto a managed skb downgrades it to
+page references, `skb_append_pagefrags()`, so a reply boundary's pages
+can still be referenced when the chain completes: the fill lets those
+go, counted as `busy`.)  Ported to 534 the same way
+([reply-recycle-534.diff](reply-recycle-534.diff), now with the chain),
+built as `/var/tmp/zc-run-logs/sunrpc-recycle2-534/` (sunrpc
+`836694F967D87E61E0B9408`), no warning, every export's version as the
+installed module's.
+
+**The A/B, about to run** (`/var/tmp/zc-run-logs/recycle2-534/`):
+`swap-sunrpc.sh` to it, `settled.sh apply`, then `ab-recycle.sh` with
+the locked READ pass, `792:0`, `793:512`, `794:0`, `795:512`, and
+`WRITE=1 ab-recycle.sh 796:512`.
