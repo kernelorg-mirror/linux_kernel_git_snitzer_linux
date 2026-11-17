@@ -2697,3 +2697,36 @@ Same shape everywhere (bytes, frags, head, segment size), so the shape is
 not it.  About to run, through `step.sh`: the memory traffic (the mesh's
 `hnf_mc_reqs`) under `ZC=1 iperf-tx.sh ab` (`t2-iperf-tx-4`), then
 `txdrain.sh 815 N` and `816 Y`, which now read it too.
+
+**Why the queues drain slowly: the replies' bytes come from memory, and
+memory is near its ceiling** (t2-r813 to r816, `t2-iperf-tx-3` and
+`-4`; the mesh's `hnf_mc_reqs`, 64 bytes a request, 5 s in the window):
+
+| run | GB/s sent | memory GB/s | memory bytes a byte sent | BQL in flight a queue, KiB | skb transmit to consume |
+|---|---|---|---|---|---|
+| iperf3 `-Z` (`t2-iperf-tx-4`) | 99.12 | 97.3 | 0.98 | (186 to 913, tx-3) | 47 us (tx-3) |
+| NFS, balance N (`t2-r815`) | 73.02 | 116.5 | 1.60 | 237 to 828 | 48 us |
+| NFS, balance Y (`t2-r816`) | 67.69 | 131.3 | 1.94 | 786 to 933 | 102 us |
+
+- **The skbs are the same shape in all of them** (r813, r814,
+  `t2-iperf-tx-3`): 55 to 60 KB, 4.6 frags of about 12.5 KB, a 66-byte
+  head, 7.7 KB segments.  So the shape is not it.
+- **A READ's byte crosses memory twice at most** (the drive writes it,
+  the NIC reads it); at N 0.4 of those crossings are saved, the system
+  cache serving the NIC what the drive just wrote (85 GB/s of fills).
+  At Y they are not: 1.94 bytes a byte, 131 GB/s, 89% of the 148 the
+  memory carries (round 98's `membw.c`), and round 98 found that a
+  memory that full slows the devices' DMA.  iperf's pages are never
+  rewritten and cost one crossing.
+- **It feeds itself:** with Y the senders' bursts fill the queues
+  (BQL), a reply's pages stay live twice as long (102 us against 48)
+  and more of them are live at once, so fewer are still in the 32 MiB
+  cache when the NIC reads them; more memory traffic slows the NIC's
+  reads, which keeps the queues full.
+- **What it means for 80 GB/s:** at N's 1.60 bytes a byte, 80 GB/s is
+  128 GB/s of memory (86%); at Y's 1.94 it is 155, past the ceiling.
+  The lever is the time and the bytes between the drive's write of a
+  reply's pages and the NIC's read of them: the shorter, the more of
+  them the cache serves.  The recycle (pages written while still
+  queued) and confinement were aimed at this and were not measured for
+  memory; one CPU a connection lost by lengthening it.
