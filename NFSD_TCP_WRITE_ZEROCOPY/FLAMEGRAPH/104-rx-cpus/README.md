@@ -2730,3 +2730,8 @@ memory is near its ceiling** (t2-r813 to r816, `t2-iperf-tx-3` and
   them the cache serves.  The recycle (pages written while still
   queued) and confinement were aimed at this and were not measured for
   memory; one CPU a connection lost by lengthening it.
+
+About to run (Mike: "try a lower BQL limit at N"), through `step.sh`:
+[bql-strobe.sh](bql-strobe.sh) `817 393216`: every transmit queue's BQL
+`limit_max` at 384 KiB (it ran 237 to 828 KiB in flight at N, r815),
+put back after.
