@@ -42,3 +42,15 @@ s in the middle.  About to run through `xeu-rig/step.sh
   not properly unmounted" in the kernel log about 10:56 is the boot
   drive's EFI partition, most likely marked dirty by the morning's
   crash; not these runs.)
+
+## Next (Mike: "run the 8:64 local point, then the NFS 4K runs")
+
+`local.sh deep 8:64`, then over NFS `nfs4k.sh <n>:<iodepth>[:<nconnect>]`:
+twoport.sh on both ports at the settled setting, fio on the client 16
+jobs a port reading the same kept files with 4 KiB random reads on
+io_uring with registered buffers, WARM=5 RUNTIME=20, mpstat on both
+ends in the load.  `twoport.sh`'s fill now always says `iodepth=16`
+(its default, so the fill's checksum is unchanged and the kept files
+hold at any IODEPTH).  About to run through `xeu-rig/step.sh
+/var/tmp/zc-run-logs/r108`: `local.sh deep 8:64`, then `nfs4k.sh
+872:16 873:32 874:64`, 512 to 2048 READs outstanding a port.
