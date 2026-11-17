@@ -284,9 +284,15 @@ says why WRITEs cannot reach it.
   drives (`WARM=3 RUNTIME=15`, a 30 s rest; it need only show that
   78 GB/s is still reached, and round 103's 40 s runs are at full rate
   from their second second, every 15 s of them within 0.2 GB/s of the
-  whole). It passes at **77.6 GB/s or more**, no drive stepped
-  down and no new kernel warning; below 77.6 it is run once more
-  (`RERUN`), and below 77.6 twice is a regression. **Until 16 November
+  whole). It passes at **75.0 GB/s or more since 17 November**
+  (Mike: "for now we must tolerate that WRITE has dropped down to 75
+  GB/s, we will hunt down the client regression after we get IOPS
+  performance up"; the client's build 541 writes 75.0 where build 469
+  wrote 77.8, and the mark goes back to 77.6 once that is fixed:
+  `WRITE.md`, TODO 2), no drive stepped down and no new kernel
+  warning; below 75.0 it is run once more (`RERUN`), and below 75.0
+  twice is a regression. **From 16 to 17 November it passed at 77.6.
+  Until 16 November
   it passed at 78.0 and ran 77.8 to 77.99 again; Mike: "77.8 to 77.99
   aren't worth concern, anything before 77.6 should be flagged for
   re-run".** A drive that steps down or a new kernel warning still

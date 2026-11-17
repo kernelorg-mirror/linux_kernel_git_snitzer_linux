@@ -17,8 +17,9 @@ rounds.
 
 `xeu-rig/write-check.sh`: one two-port WRITE run on all eight drives at
 `settled.sh`'s setting, fio 8 MiB writes on libaio, 16 jobs a port at
-iodepth 16, nconnect 16 a port, `WARM=3 RUNTIME=15`.  It passes at 77.6
-GB/s with no drive stepped down and no new kernel warning.
+iodepth 16, nconnect 16 a port, `WARM=3 RUNTIME=15`.  It passes at
+**75.0 GB/s since 17 November** (77.6 before; TODO 2) with no drive
+stepped down and no new kernel warning.
 
 | Client kernel | Runs | GB/s | Drives each (busiest) | Client busy |
 |---|---|---|---|---|
@@ -31,9 +32,12 @@ not more: the client sends less, evenly, and nothing on either end is
 full.  The server's only change between the two is that nfsd is NFSv3
 only (`settled.sh`, round 109), which WRITEs over NFSv3 do not reach.
 Mike: "has to be client side difference.. I upgraded that client
-kernel".  **The 77.6 mark is unchanged**; on build 541 the pass reads
-below it until the client's WRITE path is recovered, and a READ round's
-WRITE pass is to be read against that.
+kernel".  **The mark is lowered to 75.0 for build 541's client (Mike,
+17 November: "for now we must tolerate that WRITE has dropped down to
+75 GB/s, we will hunt down the client regression after we get IOPS
+performance up")**, until its WRITE path is recovered (TODO 2).  The
+tip's server stack on build 541 read 74.91 (t2-r915, RERUN under
+both marks).
 
 For scale: the drives take 9.8 GB/s each at 98% busy (78.4 for eight),
 and a WRITE of 1 MiB costs the client about 2.17 bytes of memory
@@ -117,9 +121,13 @@ against it.  For WRITEs on tardis2:
    - then, if those do not, the commits above one at a time on a
      client module built without each (the splice first: its pages
      held until TCP sends them, and the per-CPU transport map second).
-2. **The WRITE mark on build 541**: 77.6 stands until Mike says
-   otherwise.  A READ or IOPS round's WRITE pass is recorded with the
-   client's build beside it.
+2. **TODO: reset the WRITE pass's mark to 77.6 GB/s** once whatever
+   holds back build 541's client is fixed (Mike, 17 November).  It is
+   75.0 in `xeu-rig/write-check.sh` (the `g >= 75.0` test and its
+   header) and in AGENTS.md's hard rule only for that client; when
+   TODO 1 brings the pass back to 77.6 or more, put 77.6 back in both
+   places and say so here.  A READ or IOPS round's WRITE pass is
+   recorded with the client's build beside it.
 3. **The client's 2.17 bytes of memory a byte on WRITEs** (round 107),
    on build 469: what they are, and what build 541 makes of them.
 4. **The client's RPCs in flight**: the pass's fio writes 8 MiB at a
