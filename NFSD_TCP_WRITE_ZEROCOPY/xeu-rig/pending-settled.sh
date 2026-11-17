@@ -18,17 +18,19 @@
 # too; the host is settled.sh's again after, without it.  Any of the
 # variables already set overrides its value here.  Nothing here changes
 # settled.sh: a change moves there only on Mike's word.
+#
+# Settled on 17 November (Mike: "settle the bound at 1.5 MiB in
+# settled.sh, effectively replacing settled.sh with pending-settled.sh"):
+# settled.sh holds all five on tardis2, the bound at 1.5 MiB (FLAMEGRAPH
+# round 106), so this sets nothing of its own and is settled.sh.  Kept so
+# that the commands round 106 wrote down still run.
 cd "$(dirname "$0")" || exit 1
-export EXP_RTC_BALANCE=${EXP_RTC_BALANCE:-Y} EXP_RFS=${EXP_RFS:-32768} \
-	EXP_TCP_LOB=${EXP_TCP_LOB:-262144} EXP_RTC_SEND_MAX=${EXP_RTC_SEND_MAX:-524288} \
-	NCONN=${NCONN:-16}
 case "${1:-}" in
 apply|audit) exec ./settled.sh "$@" ;;
 run)
 	shift; [ $# -gt 0 ] || { echo "pending-settled.sh run <command ...>"; exit 1; }
 	"$@"; rc=$?
-	env -u EXP_RTC_BALANCE -u EXP_RFS -u EXP_TCP_LOB -u EXP_RTC_SEND_MAX -u NCONN \
-		./settled.sh apply > /var/tmp/zc-run-logs/pending-settled-after.txt 2>&1
+	./settled.sh apply > /var/tmp/zc-run-logs/pending-settled-after.txt 2>&1
 	echo "settled again: $(tail -1 /var/tmp/zc-run-logs/pending-settled-after.txt)"
 	exit $rc ;;
 *) echo "pending-settled.sh apply|audit|run <command ...>"; exit 1 ;;

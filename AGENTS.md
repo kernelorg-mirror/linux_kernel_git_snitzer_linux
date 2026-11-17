@@ -456,12 +456,30 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**tardis2's settled setting since 17 November (Mike: "settle the
+bound at 1.5 MiB in settled.sh, effectively replacing settled.sh with
+pending-settled.sh"): FLAMEGRAPH round 105's base and round 106's
+bound.**  `settled.sh` holds on tardis2 `svc_rtc_balance` Y, RFS
+32768, `tcp_limit_output_bytes` 256 KiB and `svc_rtc_send_max` 1.5 MiB,
+and `common.sh`'s `TWO_NCONN` is 16; `pending-settled.sh` now sets
+nothing of its own.  Its passes are t2-r858 (WRITE, 77.83 GB/s) and
+t2-r859 (READ, 79.24), and the account is
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/106-pending-base/README.md`.  The
+bound needs the promised count: build 534's `updates/` holds the whole
+rebuilt stack with it (sunrpc `CFADF668BD58CB4A39A77E0`, nfsd
+`603083CAF5F5B5E8DE898AC`, lockd `E80CADD7B3A4CF927760A78`, and five
+more), built with `build-svcstack.sh` because the change to a struct
+re-versions sunrpc's exports.  A sunrpc without the count (the earlier
+`AF72…`, which `settled.sh` cannot tell from it) costs READs at the
+bound (t2-r840: 67.75 at 512 KiB), so no other `sunrpc.ko` goes into
+`updates/` without those three modules' build.
+
 **tardis2's next boot (Mike, 17 November): build 534 with EFI pstore
-(the one-shot entry `ofp-rocky-534-pstore.conf`) and the hold-back
-and write-space fixes' `sunrpc.ko` (`AF720978447140137AFC2FE`) in
-`updates/`.  Start
+(the one-shot entry `ofp-rocky-534-pstore.conf`) and, since then, the
+promise stack above in `updates/`.  Start
 at "Next boot: the hold-back fix on the rig" at the end of
-`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/105-read-base/README.md`; the
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/105-read-base/README.md`, then the
+settled setting above; the
 `svc_rtc_kunit` suite took the host down on 17 November and is not
 to be run again until its crash is understood.**
 

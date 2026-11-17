@@ -50,8 +50,10 @@ declare -A PFS=([a]="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" [b]="/hs/nvme4 /hs
 # (Mike), a WRITE's record read off its connection in half the time.
 # The client's mount option and not nfsd's max_block_size, which caps
 # a READ too and cost reads 12% (48.5 GB/s against 55.2, t2-r593..r596).
+# TWO_NCONN is 16 on tardis2 since 17 November (Mike; FLAMEGRAPH round
+# 105's base, settled with the send bound), 12 from 3 November to then.
 case $HOST in
-tardis2) TWO_RCVBUF=524288; TWO_NCONN=12; TWO_WRITES=64; TWO_WINDOW=10; TWO_WSIZE=524288 ;;
+tardis2) TWO_RCVBUF=524288; TWO_NCONN=16; TWO_WRITES=64; TWO_WINDOW=10; TWO_WSIZE=524288 ;;
 *)       TWO_RCVBUF=393216; TWO_NCONN=16; TWO_WRITES=128; TWO_WINDOW=0; TWO_WSIZE=1048576 ;;
 esac
 DEFWHICH=$(tr -d ' ' <<< "$PORTS")	# a script's default ports: "ab" or "a"

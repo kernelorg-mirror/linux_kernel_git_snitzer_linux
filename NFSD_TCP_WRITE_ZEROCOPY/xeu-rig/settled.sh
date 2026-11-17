@@ -372,35 +372,48 @@ RTC_CPUS_SETTLED=$RTC_CPUS
 # sunrpc's svc_rtc_balance, placing each rtc work item on the eligible CPU
 # holding the fewest rather than by a hash ("SUNRPC: Optionally place each
 # rtc work item on the least-loaded CPU", fe25e474fa3de; FLAMEGRAPH round
-# 104).  N until Mike's word.  A sunrpc without it is not BAD at N.
+# 104).  Y on tardis2 since 17 November (Mike: "settle the bound at 1.5
+# MiB in settled.sh, effectively replacing settled.sh with
+# pending-settled.sh"), round 105's base with the bound below; N
+# elsewhere.  A sunrpc without it is not BAD at N.
 # EXP_RTC_BALANCE holds a run (and apply) to Y or N.
 RTC_BALANCE=N
+[ $HOST = tardis2 ] && RTC_BALANCE=Y
 RTC_BALANCE_SETTLED=$RTC_BALANCE
 [ -n "${EXP_RTC_BALANCE:-}" ] && RTC_BALANCE=$EXP_RTC_BALANCE
 # sunrpc's svc_rtc_send_max, the bytes a connection's send queue may hold
 # before its rtc work item takes another call ("SUNRPC: Bound the replies
-# a run-to-completion connection holds", f379dad69c793): 0, the bound off.
-# It gains on FLAMEGRAPH round 105's base (t2-r838: 64.47 GB/s against
-# 59.57 at 0, 686 cycles a KiB against 745) but costs at this setting
-# (t2-r840, the READ pass at 512 KiB: 67.75 against t2-r835's 73.10), so
-# it stays 0 until the base is settled (Mike, 17 November: "its fine to
-# keep settled send bound back to 0"); pending-settled.sh carries it with
-# the base for round 106.  Only with the hold-back and write-space
-# fixes (544300fa74a00, 5562f5e440e7f, 6e2ea298a2dc3): without the first
-# every connection hangs at the bound, without the last the work items
-# spin on each ACK.  A sunrpc whose rtc_stats has no send_nospace lacks
-# the last, and audits BAD with the bound set.  0 elsewhere.
+# a run-to-completion connection holds", f379dad69c793).  1.5 MiB on
+# tardis2 since 17 November (Mike), counted from each READ's admission
+# (the promised count, 49f022fca9378; FLAMEGRAPH round 106): with round
+# 105's base below, the READ pass reads 79.24 GB/s (t2-r859) against
+# 73.12 at 0 on the old setting (t2-r849), the WRITE pass 77.83
+# (t2-r858), and 1.5 MiB repeats at 79.03 and 78.88 in the strobe at
+# 0.99 memory bytes a byte sent, against 1.41.  512 KiB and less starve
+# the connections; 2 MiB lets 36 MB wait for the NIC, past the cache.
+# Only with the hold-back and write-space fixes and the promised count
+# (544300fa74a00, 5562f5e440e7f, 6e2ea298a2dc3, 49f022fca9378): without
+# the first every connection hangs at the bound, without the second the
+# work items spin on each ACK, without the third the bound counts only
+# what reached the socket (t2-r840: 67.75 at 512 KiB).  A sunrpc whose
+# rtc_stats has no send_nospace lacks the write-space fix, and audits BAD
+# with the bound set.  0 elsewhere.
 # EXP_RTC_SEND_MAX holds a run (and apply) to other bytes, 0 for none.
 RTC_SEND_MAX=0
+[ $HOST = tardis2 ] && RTC_SEND_MAX=1572864
 RTC_SEND_MAX_SETTLED=$RTC_SEND_MAX
 [ -n "${EXP_RTC_SEND_MAX:-}" ] && RTC_SEND_MAX=$EXP_RTC_SEND_MAX
-# Receive Flow Steering: off (no RPS on any queue, no flow table).
+# Receive Flow Steering: a flow table of 32768 on tardis2 since 17
+# November (Mike; round 105's base), off elsewhere (no RPS on any
+# queue, no flow table).
 # EXP_RFS=<flow table entries> holds a run (and apply) to RFS with every
 # receive queue's rps_cpus at nfsd's CPUs and an eighth of the entries
 # as its rps_flow_cnt, so a connection's frames are processed on the CPU
 # that last sent on it (FLAMEGRAPH round 104: the READ pages' frees on
 # the CPU that allocated them).
-RFS=${EXP_RFS:-0}
+RFS_SETTLED=0
+[ $HOST = tardis2 ] && RFS_SETTLED=32768
+RFS=${EXP_RFS:-$RFS_SETTLED}
 # EXP_RPS=<cpulist> holds a run (and apply) to plain RPS, no flow table:
 # every receive queue's rps_cpus at those CPUs, so the ring CPUs keep the
 # driver's poll and GRO and hand TCP's receive (for READs, the client's
@@ -476,6 +489,10 @@ declare -A SYSCTL=(
 # EXP_TCP_LOB holds a run (and apply) to another net.ipv4.tcp_limit_output_bytes:
 # the bytes a socket may have below TCP, in the qdisc and the NIC (TCP small
 # queues; FLAMEGRAPH round 105: READs on the base held 2.75 MB a socket there).
+# 256 KiB on tardis2 since 17 November (Mike; round 105's base), 4 MiB
+# elsewhere.
+[ $HOST = tardis2 ] && SYSCTL[net.ipv4.tcp_limit_output_bytes]=262144
+TCP_LOB_SETTLED=${SYSCTL[net.ipv4.tcp_limit_output_bytes]}
 [ -n "${EXP_TCP_LOB:-}" ] && SYSCTL[net.ipv4.tcp_limit_output_bytes]=$EXP_TCP_LOB
 # The client's, read over its management address and never changed from
 # here ("the client untouched"): what bears on how it receives and sends.
@@ -610,7 +627,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "$RTC_CPUS" != "$RTC_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_cpus=${RTC_CPUS:-none}"
 	[ "$RTC_BALANCE" != "$RTC_BALANCE_SETTLED" ] && OFF="$OFF svc_rtc_balance=$RTC_BALANCE"
 	[ "$RTC_SEND_MAX" != "$RTC_SEND_MAX_SETTLED" ] && OFF="$OFF svc_rtc_send_max=$RTC_SEND_MAX"
-	[ "$RFS" != 0 ] && OFF="$OFF rfs=$RFS"
+	[ "$RFS" != "$RFS_SETTLED" ] && OFF="$OFF rfs=$RFS"
 	[ -n "$RPS_CPUS" ] && OFF="$OFF rps=$RPS_CPUS"
 	[ "$TX_DEFER" != 0 ] && OFF="$OFF skb_tx_defer_max=$TX_DEFER"
 	[ -n "${EXP_REFILL:-}" ] && [ "$EXP_REFILL" != "${XEU[rx_refill_thresh]}" ] && OFF="$OFF rx_refill_thresh=$EXP_REFILL"
@@ -620,7 +637,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	for k in $PORTS; do [ -n "${EXP_DEFER:-}" ] && [ "$EXP_DEFER" != "${DEFER[$k]}" ] && OFF="$OFF defer_$k=$EXP_DEFER"; done
 	[ -n "${EXP_SRV_QDISC:-}" ] && [ "$EXP_SRV_QDISC" != "$SRV_QDISC" ] && OFF="$OFF srv_qdisc=$EXP_SRV_QDISC"
 	[ -n "${EXP_SKB_DEFER_MAX:-}" ] && [ "$EXP_SKB_DEFER_MAX" != "${SYSCTL[net.core.skb_defer_max]}" ] && OFF="$OFF skb_defer_max=$EXP_SKB_DEFER_MAX"
-	[ -n "${EXP_TCP_LOB:-}" ] && [ "$EXP_TCP_LOB" != 4194304 ] && OFF="$OFF tcp_limit_output_bytes=$EXP_TCP_LOB"
+	[ -n "${EXP_TCP_LOB:-}" ] && [ "$EXP_TCP_LOB" != "$TCP_LOB_SETTLED" ] && OFF="$OFF tcp_limit_output_bytes=$EXP_TCP_LOB"
 	[ -n "${EXP_RODATA:-}" ] && [ "$EXP_RODATA" != "$RODATA" ] && OFF="$OFF rodata=$EXP_RODATA"
 	[ -n "${EXP_RX_REGION_STACK:-}" ] && [ "$EXP_RX_REGION_STACK" != "$RX_REGION_STACK" ] && OFF="$OFF rx_region_stack=$EXP_RX_REGION_STACK"
 	[ -n "${EXP_REGION_PAGES:-}" ] && [ "$EXP_REGION_PAGES" != "$REGION_PAGES" ] && OFF="$OFF region_pages=$EXP_REGION_PAGES"

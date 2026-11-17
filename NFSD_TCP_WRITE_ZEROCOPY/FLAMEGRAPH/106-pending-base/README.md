@@ -377,3 +377,15 @@ MiB with round 105's base is Mike's decision; `settled.sh` is unchanged.
 The watch's stall test counts READ work items, which WRITEs do not
 run, so it reported a false stall in t2-r858's load (wire 39 GB/s a
 port at the time).
+
+**Settled (Mike, 17 November: "yes, settle the bound at 1.5 MiB in
+settled.sh, effectively replacing settled.sh with pending-settled.sh").**
+On tardis2 `settled.sh` now holds `svc_rtc_balance` Y, RFS 32768,
+`tcp_limit_output_bytes` 262144 and `svc_rtc_send_max` 1572864, and
+`common.sh`'s `TWO_NCONN` is 16 (12 before); tardis1 is as it was.
+`pending-settled.sh` sets nothing of its own.  `settled.sh apply`
+ended in "the settled setting" with no BAD item.  The passes for the
+change are t2-r858 and t2-r859, which ran these same values through
+`pending-settled.sh`'s overrides; from here the settled rows of
+`ab.sh` (`<n>:settled`) are this setting, and rows before it
+(t2-r847, t2-r853) are the old one.
