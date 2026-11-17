@@ -2864,3 +2864,13 @@ About 0.7 GB/s a connection that shares a CPU.  The hash places 24
 connections on 48 CPUs afresh at every mount, so this is most of N's run
 to run spread, and 0 shared would be about 75 to 76.  The page lists'
 effect is to be judged on a run whose placement matches its pair's.
+
+## No sharing with N's spread (Mike, 17 November: "yes, write the hash-without-sharing placement")
+
+Not written: `svc_rtc_pick_least()` (balance Y) already starts at the
+connection's hash and takes the first CPU holding none, but walks the
+node in order and wraps to CPU 8, so it packed tonight's connections onto
+8 to 31.  The CPUs share no L2 (512 KiB each, `cache/index2`).  The same
+placement over N's spread is a setting: balance Y with `svc_rtc_cpus` at
+the 24 even CPUs 8 to 54, one connection to each.  About to run, through
+`step.sh`: `EXP_RTC_CPUS=8-54:2 PROBE=skbshape txdrain.sh 819 Y`.
