@@ -227,6 +227,18 @@ DRC_MAX_ENTRIES=4096
 # 1048576 unless /run/zc-max-block-size holds another (a run's).
 # EXP_MAX_BLOCK_SIZE holds a run to another.
 MAX_BLOCK_SIZE=1048576
+# NFSv3 only, and nfsdcld never runs (Mike, 17 November: "turn off
+# NFSv4 and make it so that nfsdcld never ever runs!").  Every mount the
+# rig makes is vers=3, but nfsd had v4 on, so nfs-server started nfsdcld,
+# the NFSv4 client tracking daemon; it spun all day on a broken pipe
+# after an nfs-server restart (FLAMEGRAPH round 109).  The drop-in
+# V3ONLY_CONF turns v4 off for nfsdctl at each start (apply restarts
+# nfs-server when /proc/fs/nfsd/versions still has it), and
+# nfsdcld.service is masked and stopped, so nfs-server's Wants= of it
+# starts nothing.
+V3ONLY_CONF=/etc/nfs.conf.d/zc-nfsv3-only.conf
+nfsd_v4() { grep -qE '(^| )\+4' /proc/fs/nfsd/versions 2>/dev/null && echo on || echo off; }
+nfsdcld_state() { echo "$(systemctl is-enabled nfsdcld 2>/dev/null || true), $(pgrep -x nfsdcld > /dev/null && echo running || echo not running)"; }
 # The sunrpc module's settings that a run may change, and their values at
 # rest.  A mode changes some of them (mode_expect below).
 declare -A REST=(
@@ -716,6 +728,8 @@ audit_nfsd() {
 		fi
 	done
 	want "nfsd max_block_size" "$(cat /proc/fs/nfsd/max_block_size 2>/dev/null)" "${EXP_MAX_BLOCK_SIZE:-$MAX_BLOCK_SIZE}"
+	want "nfsd NFSv4" "$(nfsd_v4)" off
+	want "nfsdcld" "$(nfsdcld_state)" "masked, not running"
 	local drc=${EXP_DRC_MAX_ENTRIES:-$DRC_MAX_ENTRIES}
 	if [ -e $DRC ]; then
 		want "nfsd drc_max_entries" "$(cat $DRC)" "$drc"
@@ -968,6 +982,24 @@ drc_live() { awk -F: '/^max entries/ {print $2 + 0}' /proc/fs/nfsd/reply_cache_s
 sizes() {
 	local drc=${EXP_DRC_MAX_ENTRIES:-$DRC_MAX_ENTRIES} stk=${EXP_RX_REGION_STACK:-$RX_REGION_STACK} p
 	local idle; [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ] && idle=1
+	# NFSv3 only, nfsdcld masked and stopped (above, V3ONLY_CONF)
+	if [ ! -s $V3ONLY_CONF ]; then
+		mkdir -p ${V3ONLY_CONF%/*} && printf '[nfsd]\nvers4=n\nvers4.0=n\nvers4.1=n\nvers4.2=n\n' > $V3ONLY_CONF || return 1
+		echo "NFSv4 off at nfs-server's next start: $V3ONLY_CONF"
+	fi
+	if [ "$(systemctl is-enabled nfsdcld 2>/dev/null)" != masked ]; then
+		echo "nfsdcld: masked"
+		systemctl mask nfsdcld > /dev/null 2>&1 || return 1
+	fi
+	pgrep -x nfsdcld > /dev/null && { echo "nfsdcld: stopped"; systemctl stop nfsdcld; pkill -x nfsdcld; }
+	if [ "$(nfsd_v4)" = on ]; then
+		if [ -n "${idle:-}" ]; then
+			echo "nfsd has NFSv4 on: restarting nfs-server, v3 only"
+			systemctl restart nfs-server || return 1
+		else
+			echo "NFS connections are up: nfsd's NFSv4 is left on"
+		fi
+	fi
 	local pm=${EXP_POOL_MODE:-$POOL_MODE} cur; cur=$(cat $PM 2>/dev/null)
 	if [ -n "$cur" ] && [ "$cur" != "$pm" ]; then
 		if [ -n "${idle:-}" ]; then
