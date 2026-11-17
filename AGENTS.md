@@ -481,6 +481,14 @@ client (the workqueue pool lock rpciod and xprtiod share, t2-r880), the
 canary-WIP commits that remove it, and the next steps once the client
 runs the canary-WIP tip.
 
+**WRITE throughput has its project document since 17 November (Mike):
+`NFSD_TCP_WRITE_ZEROCOPY/WRITE.md`**: the WRITE pass on each client
+build (77.8 GB/s on build 469, 75.0 on build 541), the client and
+server commits and settings that carry a WRITE, and the TODO to recover
+the client's WRITE path on build 541, which waits on IOPS (Mike: "I
+don't want to take the time to do that at the expense of IOPS right
+now").
+
 **tardis2's settled setting since 17 November (Mike: "settle the
 bound at 1.5 MiB in settled.sh, effectively replacing settled.sh with
 pending-settled.sh"): FLAMEGRAPH round 105's base and round 106's
