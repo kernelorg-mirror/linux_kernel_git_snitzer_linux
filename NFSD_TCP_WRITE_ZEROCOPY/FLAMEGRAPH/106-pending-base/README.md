@@ -228,3 +228,35 @@ base (t2-r846, 69.08) is 1.4% short of the settled setting, with nine
 times the bytes waiting for the NIC (36 MB against 4) and 0.43 more
 memory bytes a byte: it reaches the rate by spending the memory the
 settled setting saves.
+
+## The promised count (17 November)
+
+Mike: "write the promised count and build it for 534".
+**`49f022fca9378`** "SUNRPC: Count a parked call's reply against the
+send bound": a call's reply counts from its park.  nfsd's READ narrows
+`rq_reserved` to its reply (`svc_reserve_auth()`) before it submits
+the I/O, so `svc_rtc_park()` adds `rq_reserved` to the connection's
+`parked_bytes` and `svc_rtc_unpark()` gives it back.  The hold and
+`svc_rtc_has_wspace()` test `sk_wmem_queued` plus `parked_bytes`
+(`svc_rtc_held()`) against `svc_rtc_send_max`.  An unpark while the
+socket is marked `SOCK_NOSPACE` enqueues the transport, so a promise
+given back with no ACK to come (a call handed to a thread, a reply
+dropped) still calls the connection back.  The bound now caps what a
+connection holds from a READ's admission, so 32 connections at 1 MiB
+hold at most 32 MiB.
+
+For 534 on the worktree as `398bd70ca9b09`.  The two new fields
+(`svc_rtc_conn.parked_bytes`, `svc_rtc_rqst.promised`) change 273 of
+sunrpc's 442 export versions (gendwarfksyms versions them from the
+types' layout; a `__GENKSYMS__` guard does nothing here), so 534's own
+lockd, nfsd and the rest no longer load against it alone.  Built with
+`build-svcstack.sh` into `/var/tmp/zc-run-logs/svcstack-promise-534/`:
+sunrpc `CFADF668BD58CB4A39A77E0` and every module of the stack that
+imports from it (auth_rpcgss, rpcsec_gss_krb5, rpcrdma, lockd,
+nfs_acl, nfs_localio, nfsd, the last from the worktree's `fs/nfsd`,
+the `sunrpc-nosplit-534` source), each with every import at the new
+version, no warning but the compiler's version.  Not installed: to
+try it, `STACK=/var/tmp/zc-run-logs/svcstack-promise-534/stack
+SUNRPC_KO=none swap-sunrpc.sh` with no client connected, the passes at
+the settled setting (bound 0), then `ab.sh` on the pending base with
+the bound at 1 MiB, 512 and 256 KiB and `847:settled` beside them.
