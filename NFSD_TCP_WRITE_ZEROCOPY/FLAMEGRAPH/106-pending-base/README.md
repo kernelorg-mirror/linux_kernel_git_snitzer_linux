@@ -140,3 +140,37 @@ through `xeu-rig/step.sh /var/tmp/zc-run-logs/r106 ab ...`: `ab.sh
 base again (unprofiled), the bound at 256 and 128 KiB, and nconnect 12
 (24 sockets, as settled), the last run last since a different
 nconnect may fill the files again.
+
+**The A/B: what the whole server holds decides it, not a connection's
+bound.**  New kernel warnings 0 in each.
+
+| run | bound | nconnect | GB/s | DMA | memory | a byte | cache fills | below TCP | Send-Q | sockets | held | cycles a KiB |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| t2-r841 (settled, profiled) | 0 | settled | 68.76 | 137.5 | 99.1 | 1.44 | 82.1 | 0.09 MB | 0.56 MB | 24 | ~16 MB | 356 / 197 / 553 |
+| t2-r843 | 512 KiB | 16 | 64.70 | 129.4 | 129.7 | 2.00 | 74.0 | 0.25 MB | 1.69 MB | 32 | 62 MB | 451 / 230 / 681 |
+| t2-r844 | 256 KiB | 16 | 66.32 | 132.6 | 127.6 | 1.92 | 75.6 | 0.23 MB | 1.36 MB | 32 | 51 MB | 436 / 221 / 657 |
+| t2-r845 | 128 KiB | 16 | 66.89 | 133.8 | 126.7 | 1.89 | 76.0 | 0.23 MB | 1.44 MB | 32 | 53 MB | 430 / 216 / 647 |
+| t2-r846 | 512 KiB | 12 | 69.08 | 138.2 | 125.4 | 1.82 | 78.4 | 0.22 MB | 1.42 MB | 24 | 39 MB | 409 / 193 / 601 |
+
+- **The bound on what is queued has done what it can.**  From 512 to
+  256 KiB the Send-Q fell to 1.36 MB a socket and the rate rose 2.5%;
+  at 128 KiB the Send-Q did not fall (1.44 MB, eleven times the
+  bound).  What a socket holds past the bound is the replies of READs
+  admitted before it was reached.
+- **Fewer sockets hold less in all, and that is what reads faster.**
+  nconnect 12 at 512 KiB holds 39 MB against 62 at 16, reads 69.08
+  (best on the pending base, above the settled profile's 68.76), at
+  1.82 bytes a byte, the most cache fills (78.4) and the fewest cycles
+  (601).  Each socket holds about the same (1.42 MB): the total is the
+  lever.
+- Against the frame, the settled setting is still the mark for memory:
+  16 MB held, 1.44 bytes a byte.  No pending run has come within the
+  32 MiB cache yet.
+
+**So the next change bounds what the service holds in all, under the
+cache, counting each READ from its admission:** a reply's bytes are
+promised when the READ is admitted and counted until TCP has them
+acknowledged, against one budget for the service (the cache's 32 MiB,
+less what the receive side holds), with a connection's share of it so
+that no connection starves.  The per-connection bound counts only what
+is queued and so cannot see the promises.
