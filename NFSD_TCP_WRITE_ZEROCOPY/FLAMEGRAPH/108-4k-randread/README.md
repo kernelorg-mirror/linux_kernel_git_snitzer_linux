@@ -169,3 +169,22 @@ handoff in `IOPS.md` has it:
     cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r108 iops-wip ./settled-iops.sh run \
         ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 881:32 882:32 883:32
     ./step.sh /var/tmp/zc-run-logs/r108 prof4k-wip ../FLAMEGRAPH/108-4k-randread/prof4k.sh 884
+
+t2-r881 and r882 did not run: twoport.sh refused, "the client's rpciod
+and xprtiod not made strict".  On build 541 rpciod is a per-CPU
+workqueue (`ccaaf769083fe`) and has no `affinity_strict`, which
+twoport.sh (round 91) required of both.  A per-CPU workqueue runs each
+item on the CPU that queued it, stricter than `affinity_strict`, so
+twoport.sh now leaves a workqueue with `per_cpu` 1 as it is, holds
+xprtiod (still unbound) strict as before, and its geometry line reads
+"per-cpu/1".  Run again from t2-r883, settled.sh's setting put back
+between:
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r108 iops-wip2 ./settled-iops.sh run \
+        ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 883:32 884:32 885:32
+    ./step.sh /var/tmp/zc-run-logs/r108 prof4k-wip ../FLAMEGRAPH/108-4k-randread/prof4k.sh 886
+
+During a run twoport.sh sets the client's workqueue
+`default_affinity_scope` to numa (`CLI_SCOPE`, since 7 November) and
+puts it back after; on build 541 the default is cache_shard, so
+xprtiod runs at numa as on build 469.
