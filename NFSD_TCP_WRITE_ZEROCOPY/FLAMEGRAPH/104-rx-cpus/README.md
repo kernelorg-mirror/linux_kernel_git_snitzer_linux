@@ -2692,3 +2692,8 @@ Next: the same BQL samples and skb transmit-to-consume under iperf3
 
 About to run, through `step.sh`: `ZC=1 PROBE=skbshape.bt iperf-tx.sh ab` as
 `t2-iperf-tx-3`, then `PROBE=skbshape txdrain.sh 813 N` and `814 Y`.
+
+Same shape everywhere (bytes, frags, head, segment size), so the shape is
+not it.  About to run, through `step.sh`: the memory traffic (the mesh's
+`hnf_mc_reqs`) under `ZC=1 iperf-tx.sh ab` (`t2-iperf-tx-4`), then
+`txdrain.sh 815 N` and `816 Y`, which now read it too.

@@ -7,6 +7,8 @@ n=${1:?txdrain.sh <n> <Y|N>} b=${2:?}
 H=$(cd "$(dirname "$0")" && pwd); O=/var/tmp/zc-run-logs/t2-r$n; mkdir -p $O; PR=${PROBE:-txdrain}; rm -f $O/$PR.txt
 (
 	for i in $(seq 1200); do [ -e $O/$PR.txt ] && break; sleep 0.5; done
+	# the mesh's memory requests (64 bytes each) and its cache's fills
+	perf stat -a -x, -e arm_cmn/hnf_mc_reqs/,arm_cmn/hnf_cache_fill/ -o $O/mem.txt -- sleep 5 &
 	for k in $(seq 25); do
 		for d in enp161s0f0 enp164s0f0; do for q in /sys/class/net/$d/queues/tx-*; do
 			echo "$k $d ${q##*/} limit $(cat $q/byte_queue_limits/limit) inflight $(cat $q/byte_queue_limits/inflight)"
@@ -19,4 +21,5 @@ wait
 # client-read.sh's own apply after the run kept EXP_RTC_BALANCE: settle again
 (cd $H/../../xeu-rig && ./settled.sh apply > $O/apply-settled.txt 2>&1; echo "settled again: $(tail -1 $O/apply-settled.txt)")
 awk '{l[$2" "$3]+=$5; f[$2" "$3]+=$7; c[$2" "$3]++} END {for (q in c) printf "%s: limit %.0f KiB, in flight %.0f KiB (mean of %d)\n", q, l[q]/c[q]/1024, f[q]/c[q]/1024, c[q]}' $O/bql.txt | sort
+awk -F, '$3 ~ /hnf_mc_reqs/ {printf "memory: %.1f GB/s of requests (hnf_mc_reqs x 64 over 5 s)\n", $1 * 64 / 5e9} $3 ~ /hnf_cache_fill/ {printf "system cache fills: %.1f GB/s\n", $1 * 64 / 5e9}' $O/mem.txt
 exit $rc
