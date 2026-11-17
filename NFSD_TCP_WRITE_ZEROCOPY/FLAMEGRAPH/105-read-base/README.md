@@ -188,3 +188,26 @@ no warning but the compiler's version, 442 exports with no version
 changed; `sunrpc.ko` `6FB8AB5B48500088A19D991` (the fix with the
 interface, which the suite needs), `svc_rtc_kunit.ko`
 `459E7C2D37A6A0314A7456F`.  **Not loaded or run.**
+
+### The boot after the hang, and the suite (17 November, about 06:10)
+
+tardis2 came back (05:37) on build 534 with `sunrpc-sendmax-534`
+(`A00D335DAB7B990CCA5645B`) from `updates/`, `svc_rtc_send_max` 0,
+nfs-server inactive, kdump armed, no `WARNING:`, `BUG:` or `Oops`;
+both ports answer 3 of 3.  The client still holds 8 NFS mounts and 34
+fio from t2-r828, so `bringup.sh` (which starts nfsd) is not run and
+nfsd is not started: the panic sysctls are set by hand as `bringup.sh`
+sets them, and `crashlog.sh` ran alone (netconsole reaches the
+client).  Clearing the client is Mike's.
+
+The suite, each through `xeu-rig/step.sh
+/var/tmp/zc-run-logs/kunit-holdfix-534 NAME ...`:
+
+1. `swap`: `swap-sunrpc.sh /var/tmp/zc-run-logs/sunrpc-holdfix-kunit-534`
+   (no NFS connection; nfs-server stays down).
+2. `umount-nfsd`; `rmmod-nfsd`; `rmmod-kunit`; `kunit-on` (`modprobe
+   kunit enable=1`); `clear-warn-once`.
+3. `insmod-suite`: `insmod svc_rtc_kunit.ko`; `dmesg-save`.
+4. `rmmod-suite`; `kunit-off`; `params` (sunrpc's settings read back).
+   nfsd is not started and `settled.sh` not applied until the client
+   is cleared.
