@@ -156,6 +156,11 @@ extern int	svc_authorise(struct svc_rqst *rqstp);
 extern enum svc_auth_status svc_set_client(struct svc_rqst *rqstp);
 extern int	svc_auth_register(rpc_authflavor_t flavor, struct auth_ops *aops);
 extern void	svc_auth_unregister(rpc_authflavor_t flavor);
+#if IS_ENABLED(CONFIG_KUNIT)
+bool svc_auth_ops_needs_module_ref(const struct auth_ops *aops);
+struct auth_ops *svc_get_auth_ops(rpc_authflavor_t flavor);
+void svc_put_auth_ops(struct auth_ops *aops);
+#endif
 
 extern void	svcauth_map_clnt_to_svc_cred_local(struct rpc_clnt *clnt,
 						   const struct cred *,
