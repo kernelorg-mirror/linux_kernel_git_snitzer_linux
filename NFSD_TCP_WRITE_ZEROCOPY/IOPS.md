@@ -234,6 +234,11 @@ largest self costs.
 
 ## Handoff (17 November, 19:20): where IOPS stand
 
+**Since round 109 the IOPS runs are at iodepth 64 and nconnect 12, now
+`settled-iops.sh`'s defaults (Mike, 17 November: "that should be
+reflected in settled-iops.sh settings!"); the commands below that name
+`:32` are from before it.  Give `nfs4k.sh` the run number alone.**
+
 **Read this first on the next session.**  tardis2 is on the boot that
 ran round 106 (build 534 with the promise stack in `updates/`), kdump
 armed, at the settled setting (`settled.sh audit rest`: "the settled
@@ -345,3 +350,11 @@ kernel warning, the drives 9.7 to 10.1 GB/s each at 99 to 100% busy.
 Against the frame: the drives read 104.58 GB/s with local fio and the
 ports send 98.31 with iperf3 `-Z`, so NFS reads at 76% of the drives
 and 81% of the wire; the pass measures no memory or Send-Q.
+
+IOPS on the tip's stack at the handoff's iodepth 32 and nconnect 16,
+`settled-iops.sh` run: t2-r918 2.02 M, t2-r919 2.01 M (client 59%
+busy, server 56 to 57%, busiest 94 to 95%).  Those were the script's
+defaults, not round 109's 64 and 12, which it had only on its command
+lines; the defaults are 64 and 12 since then, and `nfs4k.sh` takes them
+when a run gives only its number.  Export borrow over t2-r918: 28.0 M
+hits, 26.6 M fills (51% hits): one slot a thread against eight exports.

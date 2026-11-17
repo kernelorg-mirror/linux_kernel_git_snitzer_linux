@@ -24,9 +24,19 @@
 #   SRV_ALIAS=1               each of the eight filesystems mounted from its own
 #                             server address, so each has its own rpc_clnt
 #                             and its own nconnect connections
-#   NCONN=16                  16 a mount, 128 in all, his connection count
+#   NCONN=12                  12 a mount, 96 in all, two on each of nfsd's
+#                             48 work CPUs (FLAMEGRAPH round 109, step 3:
+#                             2.31 M IOPS against 2.20 at his 16, t2-r899
+#                             and r902); 16 until 17 November
 #   JOBS=24                   a port: 48 jobs, one a client CPU
-#   IODEPTH=32, io_uring with registered buffers, 4 KiB random READs
+#   IODEPTH=64, io_uring with registered buffers, 4 KiB random READs
+#                             (round 109 ran every A/B from step 3 on at
+#                             64); 32, his, until 17 November.  Round 109
+#                             put 12 and 64 only on its command lines, so
+#                             runs without them fell back to 16 and 32
+#                             (t2-r918, r919: 2.01 to 2.02 M); Mike, 17
+#                             November: "that should be reflected in
+#                             settled-iops.sh settings!"
 #   CLI_SCOPE=cache_shard     the client's workqueue default_affinity_scope
 #                             for the run, build 541's own default, not
 #                             twoport.sh's numa (Mike, 17 November: "add
@@ -67,7 +77,7 @@ case "${1:-}" in
 apply|audit) exec ./settled.sh "$@" ;;
 run)
 	shift; [ $# -gt 0 ] || { echo "settled-iops.sh run <command ...>"; exit 1; }
-	export SRV_ALIAS=${SRV_ALIAS:-1} NCONN=${NCONN:-16} JOBS=${JOBS:-24} IODEPTH=${IODEPTH:-32}
+	export SRV_ALIAS=${SRV_ALIAS:-1} NCONN=${NCONN:-12} JOBS=${JOBS:-24} IODEPTH=${IODEPTH:-64}
 	export CLI_SCOPE=${CLI_SCOPE:-cache_shard}
 	export RW=${RW:-randread} BS=${BS:-4k} IOENGINE=${IOENGINE:-io_uring} FIXEDBUFS=${FIXEDBUFS-1}
 	"$@"; rc=$?
