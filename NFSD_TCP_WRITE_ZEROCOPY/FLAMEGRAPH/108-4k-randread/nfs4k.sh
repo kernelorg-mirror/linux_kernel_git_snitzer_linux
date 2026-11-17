@@ -1,11 +1,14 @@
 #!/bin/bash
-# nfs4k.sh <n>:<iodepth>[:<nconnect>] ...: FLAMEGRAPH round 108, 4 KiB
+# nfs4k.sh <n>[:<iodepth>[:<nconnect>]] ...: FLAMEGRAPH round 108, 4 KiB
 # random READs over NFS (Mike, 17 November: "then the NFS 4K runs").  Each
 # run is twoport.sh on both ports at the settled setting, reading the
 # kept f-* files (about 2 GB a drive, the same local.sh read): fio on
 # the client 16 jobs a port, 4 KiB random reads, O_DIRECT, io_uring with
 # registered buffers, at <iodepth> a job and nconnect <nconnect> a port
-# (common.sh's TWO_NCONN when not given), 30 s of rest, WARM=5
+# (common.sh's TWO_NCONN when not given), 30 s of rest, WARM=5.  An
+# iodepth or nconnect left out is the environment's IODEPTH or NCONN,
+# which xeu-rig/settled-iops.sh run sets to the settled 64 and 12 (Mike,
+# 17 November); before that an iodepth was required.
 # RUNTIME=20.  From the load's second 8, 10 s of mpstat on the server and
 # the client.  It prints IOPS in all and a port, completion latency, and
 # how busy each end was (iowait not counted).
@@ -19,7 +22,8 @@ busy() {	# busy <mpstat file> <first cpu> <last cpu>
 }
 for run in "$@"; do
 	IFS=: read n qd nc <<< "$run"
-	[ -n "$n" ] && [ -n "$qd" ] || { say "nfs4k.sh <n>:<iodepth>[:<nconnect>] ..."; exit 1; }
+	qd=${qd:-$IODEPTH} nc=${nc:-$NCONN}
+	[ -n "$n" ] && [ -n "$qd" ] || { say "nfs4k.sh <n>[:<iodepth>[:<nconnect>]] ... (IODEPTH from the environment)"; exit 1; }
 	[ "$(cat /sys/kernel/kexec_crash_loaded)" = 1 ] || { say "kdump not armed"; exit 1; }
 	O=$L/t2-r$n; mkdir -p $O
 	client_free || { say "client not free"; exit 1; }
