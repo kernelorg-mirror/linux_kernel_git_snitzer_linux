@@ -168,3 +168,16 @@ given others (`IOENGINE=libaio` for the old engine, `FIXEDBUFS=0` for
 io_uring without registered buffers); AGENTS.md's READ rule says so.
 Passes before t2-r867 are libaio's.  The WRITE pass and the strobes
 (`client-read.sh`, `ab.sh`) stay on libaio unless told.
+
+## WRITEs on io_uring (Mike: "run the write A/B with io_uring fixedbufs")
+
+An O_DIRECT write pins fio's pages for every request as a read does,
+and the client sends them to TCP by reference without a copy, so
+pinning and submission are a larger share of a write's client cost; but
+it gains only if the client holds WRITEs, where the server's copy and
+the drives may.  `ab-write.sh` runs the WRITE pass itself
+(`write-check.sh`, files kept) with each engine and, in the load,
+mpstat on both ends, the client's memory controllers and 5 s of its
+call chains.  About to run through `step.sh /var/tmp/zc-run-logs/r107
+write`: `ab-write.sh 868:libaio 869:io_uring:fixed 870:libaio
+871:io_uring:fixed`.
