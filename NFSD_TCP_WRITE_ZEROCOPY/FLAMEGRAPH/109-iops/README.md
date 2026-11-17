@@ -147,3 +147,32 @@ the passes are not a regression of it; the WRITE mark on the build 541
 client is Mike's to decide.  The READ pass follows:
 
     cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 rpass ./read-check.sh 906
+
+**The READ pass: PASS at 80.02 GB/s (t2-r906)**, new kernel warnings 0,
+both ports at about 40, the drives 9.9 to 10.1 GB/s each at 100%
+(80.39 in t2-r867 on build 469): v3 only and the client's build 541
+leave READs where they were.
+
+## The client in the audit
+
+Mike, 17 November: "add the client audit".  `settled.sh`'s client
+audit (read only) read the client's sysctls, its ports' qdiscs and
+pause frames.  It now also reads, against `CLI_KERNEL` and the rest
+beside `CLI_DEV`: the client's kernel (build 541; `EXP_CLI_KERNEL` for
+another), its command line (`idle=poll`, `processor.max_cstate=1`,
+`intel_idle.max_cstate=0`, `iommu=off`, `selinux=0`), rpciod per-CPU,
+xprtiod unbound and strict, `sunrpc.xprt_numa_map` Y,
+`nfs.nowait_writable` N (or nfs not loaded), `kernel.io_uring_disabled`
+0, both ports at MTU 9000; and at rest only (a run changes them and
+puts them back) the workqueue scope cache_shard, irqbalance active and
+no `SRV_ALIAS` address left on the server's ports.  `twoport.sh`'s
+client line records the client's kernel in every run's geometry.
+Nothing on either host is set by it, so the setting the passes ran on
+(t2-r905 to r907) is unchanged.
+
+## 4. What the server's busiest CPU does
+
+Mike: "profile the hot CPU".  `prof-hot.sh` at the best of section 3,
+iodepth 64 and nconnect 12:
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 hot ../FLAMEGRAPH/109-iops/prof-hot.sh 908 64 12
