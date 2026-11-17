@@ -326,6 +326,8 @@ extern bool svc_rtc_kunit_no_slot;	/* KUnit: fail the request slot */
 extern bool svc_rtc_kunit_no_grow;	/* KUnit: fail pool growth */
 extern unsigned int svc_rtc_kunit_no_grow_hits;	/* growths it failed */
 long svc_rtc_kunit_active(void);	/* KUnit: runs and pool rqsts in use */
+unsigned int svc_rtc_kunit_send_max(unsigned int bytes);
+u64 svc_rtc_kunit_send_full(void);	/* KUnit: receives held back */
 #endif
 void	svc_rtc_pool_resize(struct svc_serv *serv);
 struct seq_file;

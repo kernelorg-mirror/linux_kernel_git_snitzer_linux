@@ -1620,6 +1620,27 @@ static bool svc_rtc_send_full(struct svc_rtc_conn *conn)
 	return true;
 }
 
+#if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
+/* KUnit: set svc_rtc_send_max, returning what it was. */
+unsigned int svc_rtc_kunit_send_max(unsigned int bytes)
+{
+	return xchg(&svc_rtc_send_max, bytes);
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_send_max);
+
+/* KUnit: the receives held back for a full send queue, over every CPU. */
+u64 svc_rtc_kunit_send_full(void)
+{
+	u64 sum = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		sum += READ_ONCE(per_cpu(svc_rtc_send_full_n, cpu));
+	return sum;
+}
+EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_send_full);
+#endif
+
 /*
  * Leave the next call in the socket while the send queue is full.  The
  * work item owns the transport (XPT_BUSY, taken by svc_xprt_enqueue()
