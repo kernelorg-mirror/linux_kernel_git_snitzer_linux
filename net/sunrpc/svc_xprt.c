@@ -1219,6 +1219,8 @@ static DEFINE_PER_CPU(struct svc_rtc_stats, svc_rtc_stats);
 static DEFINE_PER_CPU(u64, svc_rtc_undiverted);
 /* Receives a work item left for later: its connection's send queue was full. */
 static DEFINE_PER_CPU(u64, svc_rtc_send_full_n);
+/* Enqueues refused write space by the send bound (svc_rtc_has_wspace()). */
+static DEFINE_PER_CPU(u64, svc_rtc_send_nospace_n);
 /*
  * Connections whose work item is placed on each CPU, over every service:
  * raised and lowered as svc_rtc_set_cpu() moves a connection, lowered
@@ -1306,6 +1308,10 @@ void svc_rtc_stats_show(struct seq_file *m)
 		for_each_possible_cpu(cpu)
 			undiverted += READ_ONCE(per_cpu(svc_rtc_send_full_n, cpu));
 		seq_printf(m, "send_full %llu\n", undiverted);
+		undiverted = 0;
+		for_each_possible_cpu(cpu)
+			undiverted += READ_ONCE(per_cpu(svc_rtc_send_nospace_n, cpu));
+		seq_printf(m, "send_nospace %llu\n", undiverted);
 		seq_puts(m, "placed");
 		for_each_possible_cpu(cpu) {
 			int n = atomic_read(per_cpu_ptr(&svc_rtc_placed, cpu));
@@ -1599,25 +1605,61 @@ module_param(svc_rtc_send_max, uint, 0644);
 MODULE_PARM_DESC(svc_rtc_send_max,
 		 "Bytes a connection's TCP send queue may hold before its run-to-completion work item takes another call (0: no bound)");
 
-static bool svc_rtc_send_full(struct svc_rtc_conn *conn)
+/*
+ * Whether @xprt's send queue holds @max bytes or more.  If it does, the
+ * socket is marked SOCK_NOSPACE, so that TCP calls svc_write_space() as
+ * ACKs shrink the queue.
+ */
+static bool svc_rtc_sk_full(struct svc_xprt *xprt, unsigned int max)
 {
-	unsigned int max = READ_ONCE(svc_rtc_send_max);
-	struct svc_sock *svsk;
-	struct sock *sk;
+	struct svc_sock *svsk = container_of(xprt, struct svc_sock, sk_xprt);
+	struct sock *sk = svsk->sk_sk;
 
-	if (!max)
-		return false;
-	svsk = container_of(conn->xprt, struct svc_sock, sk_xprt);
-	sk = svsk->sk_sk;
 	if (READ_ONCE(sk->sk_wmem_queued) < max)
 		return false;
 	set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 	/* An ACK that shrank the queue before the mark was seen kicks no one. */
 	smp_mb__after_atomic();
-	if (READ_ONCE(sk->sk_wmem_queued) < max)
+	return READ_ONCE(sk->sk_wmem_queued) >= max;
+}
+
+static bool svc_rtc_send_full(struct svc_rtc_conn *conn)
+{
+	unsigned int max = READ_ONCE(svc_rtc_send_max);
+
+	if (!max || !svc_rtc_sk_full(conn->xprt, max))
 		return false;
 	this_cpu_inc(svc_rtc_send_full_n);
 	return true;
+}
+
+/**
+ * svc_rtc_has_wspace - Whether the send bound leaves a connection room
+ * @xprt: connected TCP transport
+ *
+ * svc_tcp_has_wspace() asks this before it reads SOCK_NOSPACE.  The
+ * mark a held-back receive set is cleared by sk_stream_write_space()
+ * on the first ACK that leaves the queue writable by TCP's own measure
+ * (free space at least half of what is queued), far over the bound, and
+ * svc_write_space() then enqueues.  Were that enqueue to find write
+ * space, every such ACK would divert and run the work item only for it
+ * to hold the receive back again.  Report no write space while the
+ * queue is at or over the bound, and mark the socket again so that the
+ * next ACK calls back.
+ *
+ * Return: %false while a connection with a work item is at or over
+ * svc_rtc_send_max, else %true.
+ */
+bool svc_rtc_has_wspace(struct svc_xprt *xprt)
+{
+	unsigned int max = READ_ONCE(svc_rtc_send_max);
+
+	if (likely(!max) || !READ_ONCE(xprt->xpt_rtc))
+		return true;
+	if (!svc_rtc_sk_full(xprt, max))
+		return true;
+	this_cpu_inc(svc_rtc_send_nospace_n);
+	return false;
 }
 
 #if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)

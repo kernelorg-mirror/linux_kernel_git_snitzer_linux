@@ -319,6 +319,7 @@ void	svc_rtc_queue_send(struct svc_xprt *xprt, struct svc_rtc_send *send);
 void	svc_rtc_stats_sum(struct svc_rtc_stats *sum);
 void	svc_rtc_serv_destroy(struct svc_serv *serv);
 void	svc_rtc_complete(struct svc_rqst *rqstp);
+bool	svc_rtc_has_wspace(struct svc_xprt *xprt);
 #if IS_ENABLED(CONFIG_SUNRPC_SVC_RTC_KUNIT_TEST)
 extern void (*svc_rtc_kunit_published)(struct svc_xprt *xprt);
 extern bool svc_rtc_kunit_no_mem;	/* KUnit: fail the receive pages */

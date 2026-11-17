@@ -4628,6 +4628,9 @@ static int svc_tcp_has_wspace(struct svc_xprt *xprt)
 	if (READ_ONCE(svsk->sk_rx_region_stalled) &&
 	    list_empty_careful(&xprt->xpt_deferred))
 		return 0;
+	/* A run-to-completion connection's send bound, svc_rtc_send_max. */
+	if (!svc_rtc_has_wspace(xprt))
+		return 0;
 	return !test_bit(SOCK_NOSPACE, &svsk->sk_sock->flags);
 }
 
