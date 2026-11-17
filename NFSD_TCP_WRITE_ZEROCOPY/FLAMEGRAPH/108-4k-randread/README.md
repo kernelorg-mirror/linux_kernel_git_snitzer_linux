@@ -126,3 +126,29 @@ socket:
 
     cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r108 prof4k \
         ../FLAMEGRAPH/108-4k-randread/prof4k.sh 880
+
+t2-r880: 1.05 M IOPS (0.52 / 0.53), 1.46 / 4.18 ms, server 41% busy
+(busiest 55%), client 95% (96%), new kernel warnings 0: the same as
+t2-r875 to r877 with both ends recorded.
+
+- **The client spends 63.5% of its cycles in
+  `native_queued_spin_lock_slowpath`, on the workqueue's pool lock,
+  not the rpc_clnt's `cl_lock`.**  `__queue_work` is 32.9% with its
+  children and `process_one_work` itself (the worker taking the next
+  item) most of the rest: every RPC step is queued on rpciod
+  (`rpc_wake_up_queued_task` 15.5%, `rpc_async_schedule` 14.0%) and
+  every receive on xprtiod (`xs_stream_data_receive_workfn` 18.9%).
+  Both are unbound on build 469 with `affinity_scope` numa, so the 24
+  CPUs of a socket share one pool and its lock (`kworker/u217` and
+  `u218`).  `call_reserveresult` and `rpc_task_release_client`, where
+  patch 27's `cl_lock` is taken, do not show.
+- **The canary-WIP tip has David's fixes for this**, all ancestors of
+  this branch: `ccaaf769083fe` (rpciod a per-CPU workqueue),
+  `50eee8803afc5` (NFS pgio runs the first RPC leg in the caller, no
+  queue), `ba5642ee4cac2` (a sent task to pending without a requeue),
+  `5555163d661a0` (each CPU its own transport under nconnect), as well
+  as patch 27 (`7cc54f28c69fc`).  xprtiod stays unbound there.
+- **The server is not the limit**: 32% of its samples idle, nfsd
+  16%; the largest self costs are the scheduler's switch (7%) and
+  softirqs (5%), then `sunrpc_cache_find_rcu` and
+  `svcauth_unix_set_client` at 1% each.
