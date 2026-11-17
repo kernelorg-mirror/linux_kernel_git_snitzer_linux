@@ -5,10 +5,11 @@
 # settled again without the base's overrides.  The base: one connection to
 # a work CPU (svc_rtc_balance Y), RFS (each flow's frames on the CPU that
 # last sent on it, its work item's), nconnect 16 a port (32 connections).
+# net.ipv4.tcp_limit_output_bytes 256 KiB (round 105: the bound below TCP).
 # Any of BASE_* overrides it for an A/B.
 n=${1:?prof.sh <n>}
 H=$(cd "$(dirname "$0")" && pwd); O=/var/tmp/zc-run-logs/t2-r$n; mkdir -p $O
-export EXP_RTC_BALANCE=${BASE_BALANCE:-Y} EXP_RFS=${BASE_RFS:-32768} NCONN=${BASE_NCONN:-16} KEEP_FILES=1
+export EXP_RTC_BALANCE=${BASE_BALANCE:-Y} EXP_RFS=${BASE_RFS:-32768} NCONN=${BASE_NCONN:-16} EXP_TCP_LOB=${BASE_LOB:-262144} KEEP_FILES=1
 (
 	for i in $(seq 1200); do [ -e $O/perf.out ] && break; sleep 0.5; done
 	perf stat -a -x, -e arm_cmn/hnf_mc_reqs/,arm_cmn/hnf_cache_fill/ -o $O/mem.txt -- sleep 5

@@ -84,3 +84,38 @@ as we move them"): it moves the queue out of the qdiscs and the NIC into
 TCP, where the next change, admission by send space, takes it.  The
 value is pinned by a sweep: 256 KiB (r823) and 4 MiB (r824) running,
 then 768 KiB (r825) and 1 MiB (r826).
+
+**The sweep (t2-r822 to r825): the bound changes where the bytes wait,
+not the rate.**
+
+| run | `tcp_limit_output_bytes` | GB/s | below TCP a socket | Send-Q | TCP RTT |
+|---|---|---|---|---|---|
+| `t2-r823` | 256 KiB | 59.40 | 0.30 MB | 3.57 MB | 0.32 ms |
+| `t2-r822` | 512 KiB | 59.58 | 0.56 MB | 3.56 MB | 0.49 ms |
+| `t2-r825` | 768 KiB | 59.52 | 0.80 MB | 3.54 MB | 0.62 ms |
+| `t2-r824` | 4 MiB | 59.34 | 2.81 MB | 3.50 MB | 1.70 ms |
+
+Memory 2.29 to 2.30 bytes a byte in all.  **256 KiB is in the base**
+(Mike: "stop and just use 256K"; `prof.sh` and `ab.sh` set it): the least
+below TCP and the shortest RTT for the same rate.  1 MiB (r826) was
+stopped by hand after its setup and ran its load out to a clean
+teardown; its figure is not counted.  The Send-Q stays at 3.5 MB a
+socket at every bound: the bytes wait in TCP, so the next change bounds
+what a connection takes on, not what TCP sends.
+
+## Admission by send space
+
+`f379dad69c793` "SUNRPC: Bound the replies a run-to-completion
+connection holds": `sunrpc.svc_rtc_send_max`, the bytes a connection's
+TCP send queue may hold before its work item takes another call.  Past
+it the call stays unread in the socket, where it holds no pages, and the
+socket is marked `SOCK_NOSPACE`, so the ACKs that shrink the queue call
+`svc_write_space()`, whose enqueue kicks the work item to receive again.
+`rtc_stats` counts the receives it held back (`send_full`).  For 534,
+on top of the placement fix: `sunrpc.ko` `A00D335DAB7B990CCA5645B` in
+`/var/tmp/zc-run-logs/sunrpc-sendmax-534/` (every export the same).
+[ab.sh](ab.sh) takes it as a third field and puts it back to 0 after.
+
+About to run, through `step.sh`: the module swapped in with no client
+connected, `settled.sh apply`, then `ab.sh 827:262144:0
+828:262144:1048576 829:262144:524288`.
