@@ -284,3 +284,32 @@ Still open: the client's 2.17 bytes of memory a byte on WRITEs (round
 waits for a `fsck.fat` at the next maintenance.  The claude.ai artifact
 "NFSD Read Promised Count" is round 106's READ story and is not used
 for IOPS (Mike, 17 November): IOPS progress is not offered for it.
+
+## Boot of 17 November, 22:43: both hosts on build 541
+
+The session on build 534 (boot of 20:04) hung at 22:15 on the root
+drive, not the rig: `nvme8` (the 64 GB Micron that holds `/` and the
+EFI partition) timed out two 256 KiB WRITEs (22:14:50, 22:15:51)
+while `boot.mount` was unmounting, and writeback waited behind it
+(kworker 187 s, umount 149 s).  No oops, no dump (none saved).  A
+boot into 534 at 22:30 installed 541 and was reset at 22:40.
+
+tardis2 now runs `7.3.3-16.hs.541.canary.el10.aarch64+16k`, the
+client `7.3.3-16.hs.541.canary.el9.x86_64`:
+
+- kdump failed at boot: `/var/lib/kdump/boot/` held a symlink for
+  541, which SELinux denies `kdump_t`.  Replaced by a copy;
+  `kexec_crash_loaded` reads 1.
+- 541 carries the promised count: `5562f5e440e7f`, `6e2ea298a2dc3`
+  and `49f022fca9378` are ancestors of `4c8aa21d29987`, and the
+  running sunrpc has `svc_rtc_has_wspace`, `svc_rtc_sk_full` and
+  `svc_rtc_unpark`.  `updates/` is empty, as it should be.  The code
+  at the tip not in 541 is the export borrow (`dcffec4ac50c1`,
+  `e5df1b4f4106b`, `d7f9f04a9ded7`) and its KUnit commits.
+- Both ports ping both ways; `bringup.sh 32768 256`, then
+  `settled.sh apply`: "the settled setting", no BAD item.
+- The client's checks of "Next", step 1: rpciod `per_cpu` 1,
+  `xprt_numa_map` Y, no NFS mounts.
+
+Still open: `nvme8`'s timeouts (the FAT dirty bit on `nvme8n1p1`
+again, at 22:30 and 22:33).
