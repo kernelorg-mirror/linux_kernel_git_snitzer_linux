@@ -416,3 +416,22 @@ none while `sk_wmem_queued` is at or over the bound, setting
 that leaves the queue over the bound then costs that test in softirq
 and no pass.  To be counted on a bounded run: `svcsock_write_space`
 events against `send_full`, before and after.
+
+**The fix, `6e2ea298a2dc3`** "SUNRPC: Let the send bound decide a
+connection's write space": `svc_tcp_has_wspace()` asks
+`svc_rtc_has_wspace()`, which, while a connection with a work item has
+`svc_rtc_send_max` or more queued, marks the socket `SOCK_NOSPACE`
+again (reading the queue once more after) and reports no write space.
+The queue test is shared with the work item's hold
+(`svc_rtc_sk_full()`).  `rtc_stats` counts the refusals as
+`send_nospace`: on a bounded run, `send_full` should fall to about one
+a closed window and `send_nospace` take the ACKs.
+
+For 534 on the worktree as `0503086723600` (on `3c583ea8bbcd2`), built
+with `build-sunrpc.sh` into `/var/tmp/zc-run-logs/sunrpc-nospace-534/`:
+no warning but the compiler's version, 442 exports with no version
+changed; `sunrpc.ko` `AF720978447140137AFC2FE`.  Not installed or
+loaded: tardis2 runs `94F9970EBA48D601405AD7A`, bound 0.  To try it:
+`swap-sunrpc.sh /var/tmp/zc-run-logs/sunrpc-nospace-534` with no client
+connected, `settled.sh apply`, the WRITE and READ passes at bound 0,
+then `ab.sh` with the bound at 0, 1 MiB and 512 KiB again.
