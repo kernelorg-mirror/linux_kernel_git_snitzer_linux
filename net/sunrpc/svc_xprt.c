@@ -1217,6 +1217,8 @@ static DEFINE_PER_CPU(struct svc_rtc_stats, svc_rtc_stats);
  * out of struct svc_rtc_stats, which nfsd's debugfs sums.
  */
 static DEFINE_PER_CPU(u64, svc_rtc_undiverted);
+/* Receives a work item left for later: its connection's send queue was full. */
+static DEFINE_PER_CPU(u64, svc_rtc_send_full_n);
 /*
  * Connections whose work item is placed on each CPU, over every service:
  * raised and lowered as svc_rtc_set_cpu() moves a connection, lowered
@@ -1300,6 +1302,10 @@ void svc_rtc_stats_show(struct seq_file *m)
 		for_each_possible_cpu(cpu)
 			undiverted += READ_ONCE(per_cpu(svc_rtc_undiverted, cpu));
 		seq_printf(m, "undiverted %llu\n", undiverted);
+		undiverted = 0;
+		for_each_possible_cpu(cpu)
+			undiverted += READ_ONCE(per_cpu(svc_rtc_send_full_n, cpu));
+		seq_printf(m, "send_full %llu\n", undiverted);
 		seq_puts(m, "placed");
 		for_each_possible_cpu(cpu) {
 			int n = atomic_read(per_cpu_ptr(&svc_rtc_placed, cpu));
@@ -1577,6 +1583,42 @@ static bool svc_rtc_balance __read_mostly;
 module_param(svc_rtc_balance, bool, 0644);
 MODULE_PARM_DESC(svc_rtc_balance,
 		 "Place each run-to-completion work item on the eligible CPU holding the fewest (default: by a hash of the connection)");
+
+/*
+ * svc_rtc_send_max: the bytes a connection's TCP send queue (unsent and
+ * unacknowledged) may hold before its work item takes another call.  A
+ * READ's pages are held from the drive's write of them until the client
+ * acknowledges them; a call left unread in the socket holds none.  Past
+ * the bound the work item leaves the next call where it is and marks the
+ * socket SOCK_NOSPACE, so TCP calls svc_write_space() as ACKs shrink the
+ * queue, whose enqueue diverts here and receives again.  0, the default,
+ * takes the next call whatever the queue holds.
+ */
+static unsigned int svc_rtc_send_max __read_mostly;
+module_param(svc_rtc_send_max, uint, 0644);
+MODULE_PARM_DESC(svc_rtc_send_max,
+		 "Bytes a connection's TCP send queue may hold before its run-to-completion work item takes another call (0: no bound)");
+
+static bool svc_rtc_send_full(struct svc_rtc_conn *conn)
+{
+	unsigned int max = READ_ONCE(svc_rtc_send_max);
+	struct svc_sock *svsk;
+	struct sock *sk;
+
+	if (!max)
+		return false;
+	svsk = container_of(conn->xprt, struct svc_sock, sk_xprt);
+	sk = svsk->sk_sk;
+	if (READ_ONCE(sk->sk_wmem_queued) < max)
+		return false;
+	set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+	/* An ACK that shrank the queue before the mark was seen kicks no one. */
+	smp_mb__after_atomic();
+	if (READ_ONCE(sk->sk_wmem_queued) < max)
+		return false;
+	this_cpu_inc(svc_rtc_send_full_n);
+	return true;
+}
 
 /* Move @conn's work item to @cpu, keeping the per-CPU counts. */
 static void svc_rtc_set_cpu(struct svc_rtc_conn *conn, int cpu)
@@ -1901,7 +1943,8 @@ static void svc_rtc_work(struct work_struct *work)
 	svc_rtc_stat_inc(runs);
 	svc_rtc_run_completions(conn);
 
-	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
+	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags) &&
+	    !svc_rtc_send_full(conn)) {
 		switch (svc_rtc_recv_step(xprt, &reason, NULL)) {
 		case SVC_RTC_THREAD:
 			svc_rtc_stat_inc(fallback[reason]);
