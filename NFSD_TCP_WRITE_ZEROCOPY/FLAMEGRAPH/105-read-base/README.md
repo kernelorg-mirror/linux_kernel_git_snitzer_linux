@@ -478,3 +478,10 @@ bound, ACKs and arriving calls both, pays that one test.
 `AF720978447140137AFC2FE` (the swap put it there): the next boot loads
 it, with the one-shot `ofp-rocky-534-pstore.conf` still set.  The
 bound stays 0 in `settled.sh` until Mike decides.
+
+### The bound settled at 512 KiB (17 November, 07:37)
+
+Mike: "set the bound to 512K in settled.sh" (`74bb517b900a1`).
+`settled.sh apply` sets it and audits `sunrpc svc_rtc_send_max
+524288`, "the settled setting".  The passes the change owes, at it:
+`write-check.sh 839` and `read-check.sh 840` (the files t2-r835 kept).
