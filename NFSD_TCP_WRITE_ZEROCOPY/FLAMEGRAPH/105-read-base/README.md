@@ -457,11 +457,11 @@ export, so the read checks after it read the same files.
 
 **The A/B with the write-space fix: the churn is gone.**
 
-| run | `svc_rtc_send_max` | GB/s | memory a byte | Send-Q mean | rtt | cycles a KiB (work / rest / all) | held back | `send_nospace` |
-|---|---|---|---|---|---|---|---|---|
-| t2-r836 | 0 | 59.57 | 2.29 | 3.54 MB | 0.332 ms | 485 / 260 / 745 | 0 | 0 |
-| t2-r837 | 1 MiB | 63.08 | 2.09 | 2.16 MB | 0.279 ms | 463 / 246 / 709 | 459083 | 43362467 |
-| t2-r838 | 512 KiB | 64.47 | 2.01 | 1.85 MB | 0.267 ms | 455 / 231 / 686 | 491654 | 46677483 |
+| run | `svc_rtc_send_max` | GB/s | memory a byte | Send-Q mean | below TCP | rtt | cycles a KiB (work / rest / all) | held back | `send_nospace` |
+|---|---|---|---|---|---|---|---|---|---|
+| t2-r836 | 0 | 59.57 | 2.29 | 3.54 MB | 0.30 MB | 0.332 ms | 485 / 260 / 745 | 0 | 0 |
+| t2-r837 | 1 MiB | 63.08 | 2.09 | 2.16 MB | 0.30 MB | 0.279 ms | 463 / 246 / 709 | 459083 | 43362467 |
+| t2-r838 | 512 KiB | 64.47 | 2.01 | 1.85 MB | 0.26 MB | 0.267 ms | 455 / 231 / 686 | 491654 | 46677483 |
 
 New kernel warnings 0 in each; the bound back at 0 and the setting
 settled after.  Against the second fix alone (t2-r832 and t2-r833):
