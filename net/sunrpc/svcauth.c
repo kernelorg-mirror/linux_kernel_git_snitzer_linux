@@ -40,6 +40,20 @@ static struct auth_ops __rcu *authtab[RPC_AUTH_MAXFLAVOR] = {
 	[RPC_AUTH_TLS]  = (struct auth_ops __force __rcu *)&svcauth_tls,
 };
 
+/*
+ * svcauth_null, svcauth_unix and svcauth_tls belong to sunrpc itself.  sunrpc
+ * cannot be unloaded while a service that links against it (nfsd, lockd) is
+ * loaded and running this code, so a module reference on its own flavors
+ * pins nothing.  Taking one costs two writes per RPC call to sunrpc's single
+ * module refcount, shared by every CPU.  Pin only a flavor whose ops belong to
+ * another module, such as RPC_AUTH_GSS from auth_rpcgss.  get and put both
+ * test this, so a reference is always dropped exactly when it was taken.
+ */
+static bool svc_auth_ops_needs_module_ref(const struct auth_ops *aops)
+{
+	return aops->owner != THIS_MODULE;
+}
+
 static struct auth_ops *
 svc_get_auth_ops(rpc_authflavor_t flavor)
 {
@@ -49,7 +63,8 @@ svc_get_auth_ops(rpc_authflavor_t flavor)
 		return NULL;
 	rcu_read_lock();
 	aops = rcu_dereference(authtab[flavor]);
-	if (aops != NULL && !try_module_get(aops->owner))
+	if (aops != NULL && svc_auth_ops_needs_module_ref(aops) &&
+	    !try_module_get(aops->owner))
 		aops = NULL;
 	rcu_read_unlock();
 	return aops;
@@ -58,7 +73,8 @@ svc_get_auth_ops(rpc_authflavor_t flavor)
 static void
 svc_put_auth_ops(struct auth_ops *aops)
 {
-	module_put(aops->owner);
+	if (svc_auth_ops_needs_module_ref(aops))
+		module_put(aops->owner);
 }
 
 /**
