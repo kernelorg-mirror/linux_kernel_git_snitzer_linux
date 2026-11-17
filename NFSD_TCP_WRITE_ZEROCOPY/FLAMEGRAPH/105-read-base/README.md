@@ -485,3 +485,18 @@ Mike: "set the bound to 512K in settled.sh" (`74bb517b900a1`).
 `settled.sh apply` sets it and audits `sunrpc svc_rtc_send_max
 524288`, "the settled setting".  The passes the change owes, at it:
 `write-check.sh 839` and `read-check.sh 840` (the files t2-r835 kept).
+
+**t2-r839, the WRITE pass at the bound: PASS, 77.91 GB/s**, no drive
+stepped down, new kernel warnings 0.  **t2-r840, the READ pass at the
+bound: FAIL, 67.75 GB/s** (33.85 and 33.90 a port), new kernel
+warnings 0: below 71.0, a regression, against t2-r835's 73.10 at the
+same placement with the bound 0.  At the settled placement (hash, no
+RFS, `svc_rtc_balance` N) the bound costs some 7%; on round 105's base
+(balance Y, RFS 32768, nconnect 16) it gained 8%.  Mike, before the
+result: the READ was not expected to pass, and the hope is that the
+base's placement wins once its bottlenecks are gone.
+
+t2-r840 also filled its files again (17 GB): t2-r839's `twoport.sh`
+ran without `KEEP_FILES`, and a run without it deletes the files and
+the markers.  `KEEP_FILES` in `read-check.sh` helps only between read
+checks that no write check comes between.
