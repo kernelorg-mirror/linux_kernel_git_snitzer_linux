@@ -36,6 +36,8 @@
 # port-setup.sh (MTU 7792, 4 rings of 256, in the region).  It takes each
 # port down and up first, which zeroes its rings' counters, and puts the
 # rings' interrupts back on their CPUs afterwards.
+# IOENGINE=<fio engine> (libaio; io_uring, with FIXEDBUFS=1 for registered
+# buffers, FLAMEGRAPH round 107; the fill stays on libaio),
 # RUNTIME=<s> (45), JOBS=<n> (16), BS (8M), NCONN (16 on one port; on two,
 # common.sh's TWO_NCONN: 12 on tardis2, 16 on tardis1), PLACE=0 to leave
 # the flows where they fall.  For a run and put back after it:
@@ -297,7 +299,7 @@ cl "for w in rpciod xprtiod; do d=/sys/devices/virtual/workqueue/\$w; [ -e \$d/a
 	{ [ $CLI_STRICT = 0 ] || { echo "the client's rpciod and xprtiod not made strict: is its sunrpc.ko the one in updates/ (WQ_SYSFS)? CLI_STRICT=0 runs without"; exit 1; }; }
 [ $CLI_IRQB = stop ] && [ "${SAVE[cirqb]}" = active ] && { cl "systemctl stop irqbalance" || { echo "the client's irqbalance not stopped"; exit 1; }; }
 echo "client: writers pinned $PIN, workqueue scope $(cl "cat $WQS") (was ${SAVE[cscope]}), rpciod and xprtiod strict $(cl "cat /sys/devices/virtual/workqueue/{rpciod,xprtiod}/affinity_strict 2>/dev/null | paste -sd/" || echo -) (sunrpc $(cl "cat /sys/module/sunrpc/srcversion")), irqbalance $(cl "systemctl is-active irqbalance") (was ${SAVE[cirqb]})" | tee -a geometry.txt
-echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE rsize $RSIZE wsize $WSIZE max_block_size $(cat /proc/fs/nfsd/max_block_size) io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read) client pin $PIN" | tee -a geometry.txt
+echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE rsize $RSIZE wsize $WSIZE max_block_size $(cat /proc/fs/nfsd/max_block_size) io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read) client pin $PIN ioengine ${IOENGINE:-libaio}${FIXEDBUFS:+ fixedbufs $FIXEDBUFS}" | tee -a geometry.txt
 
 for p in $PORTS; do
 	d=${DEV[$p]}
@@ -383,6 +385,7 @@ done
 job() {	# job <port> <prefix> <seconds> [seconds of warm-up fio leaves out of its figures]
 	local n=${NFS[$1]} per i
 	per=$(( JOBS / n )); [ $per -lt 1 ] && per=1
+	FB=; [ "${FIXEDBUFS:-0}" = 1 ] && FB=$'\nfixedbufs=1'
 	cat <<J
 [global]
 rw=${5:-$RW}
@@ -393,8 +396,8 @@ time_based
 runtime=$3
 ${4:+ramp_time=$4}
 direct=1
-ioengine=libaio
-iodepth=$IODEPTH
+ioengine=${IOENGINE:-libaio}
+iodepth=$IODEPTH$FB
 numjobs=$per
 group_reporting
 $([ "$PIN" = 1 ] && echo "cpus_allowed=${CPUS[$1]}")
@@ -462,7 +465,7 @@ for p in $PORTS; do job $p f $RUNTIME $WARM | clput /tmp/twoport-$p.fio; done
 # fill's sizes, so the read after it skips the fill (write-check.sh, then
 # read-check.sh).  A write that finds no valid marker, and any run without
 # KEEP_FILES, deletes the files and the markers after its load.
-for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' > fill-$p.fio; done
+for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' -e 's/^ioengine=.*/ioengine=libaio/' -e '/^fixedbufs=/d' > fill-$p.fio; done	# the fill always on libaio, so its marker holds whatever IOENGINE a run reads with
 FILLSUM=$(cat $(for p in $PORTS; do echo fill-$p.fio; done) | md5sum | cut -c1-32)
 filled=1
 for p in $PORTS; do for fs in ${FS[$p]}; do

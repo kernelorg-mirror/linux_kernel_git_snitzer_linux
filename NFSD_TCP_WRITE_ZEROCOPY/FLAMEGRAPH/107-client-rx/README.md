@@ -86,3 +86,10 @@ READ goes to io_uring's own workers, which may cost more.  To run:
 keep their shape) and `FIXEDBUFS`, in three strobes at the settled
 setting with this round's client counters: libaio, io_uring, and
 io_uring with `fixedbufs=1`.
+
+`twoport.sh` takes `IOENGINE` and `FIXEDBUFS` (the default job text
+unchanged, checked by checksum against the old script, and the fill
+always on `libaio`, so the kept files' markers hold).  About to run,
+through `step.sh /var/tmp/zc-run-logs/r107 engine`: `ab-engine.sh
+862:libaio 863:io_uring 864:io_uring:fixed 865:libaio`, libaio on
+either side for the spread.
