@@ -7,7 +7,8 @@
 # descriptor, pages reused, let go still referenced, freed by a full
 # cache or a trim, replies spliced for want of a descriptor, sends TCP
 # copied) and those still live and cached at its end.  WRITE=1 runs
-# write-check.sh <n> instead.  A rate under the mark goes on to the next
+# write-check.sh <n> instead; STROBE=1 the quick READ strobe
+# (client-read.sh <n>) with its files kept from run to run (KEEP_FILES=1).  A rate under the mark goes on to the next
 # pair; a run that did not finish, or a new kernel warning, stops it.
 # Ends with the recycle at 0 and settled.sh apply.  Run each pair
 # through step.sh.
@@ -24,7 +25,9 @@ for pair in "$@"; do
 	O=$L/t2-r$n; mkdir -p $O
 	echo $pages > $P || exit 1
 	cat $S > $O/recycle.0
-	if [ "${WRITE:-0}" = 1 ]; then ./write-check.sh $n; else ./read-check.sh $n; fi
+	if [ "${WRITE:-0}" = 1 ]; then ./write-check.sh $n
+	elif [ "${STROBE:-0}" = 1 ]; then KEEP_FILES=1 ../FLAMEGRAPH/104-rx-cpus/client-read.sh $n
+	else ./read-check.sh $n; fi
 	rc=$?
 	cat $S > $O/recycle.1
 	say "t2-r$n recycle $(cat $P): $(grep -E '^total' $O/run.log)"

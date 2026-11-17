@@ -231,7 +231,12 @@ cleanup() {
 	[ -n "${RINGS:-}" ] && { for p in $PORTS; do ethtool -X ${DEV[$p]} equal 4 2>/dev/null; ip link set ${DEV[$p]} down; sleep 1; ethtool -L ${DEV[$p]} combined 4; ip link set ${DEV[$p]} up; done; sleep 7; }
 	[ -n "${ENTRIES:-}${RINGS:-}" ] && { for p in $PORTS; do ethtool -G ${DEV[$p]} rx 256 2>/dev/null; done; sleep 7; }
 	for p in $PORTS; do
-		cl "rm -f /mnt/rxr-$p[0-9]*/f-* /mnt/rxr-$p[0-9]*/bal-* 2>/dev/null; for m in /mnt/rxr-$p[0-9]*; do umount -f \$m 2>/dev/null; done"
+		if [ "${KEEP_FILES:-0}" = 1 ]; then
+			cl "rm -f /mnt/rxr-$p[0-9]*/bal-* 2>/dev/null; for m in /mnt/rxr-$p[0-9]*; do umount -f \$m 2>/dev/null; done"
+		else
+			cl "rm -f /mnt/rxr-$p[0-9]*/f-* /mnt/rxr-$p[0-9]*/bal-* 2>/dev/null; for m in /mnt/rxr-$p[0-9]*; do umount -f \$m 2>/dev/null; done"
+			for fs in ${FS[$p]}; do rm -f $fs/zcbudget/.twoport-filled; done
+		fi
 		for fs in ${FS[$p]}; do exportfs -u "${CLI[$p]}:$fs/zcbudget" 2>/dev/null; done
 		for a in ${ALIASES[$p]:-}; do ip addr del $a/24 dev ${DEV[$p]} 2>/dev/null; done
 	done
@@ -449,11 +454,27 @@ if [ "${PLACE:-1}" != 0 ]; then
 fi
 
 for p in $PORTS; do job $p f $RUNTIME $WARM | clput /tmp/twoport-$p.fio; done
+# KEEP_FILES=1: a run that reads keeps its files for the next, and skips the
+# fill when every export holds the marker of a fill from the same fio job
+# files (Mike, 17 November: "the file read shouldn't be recreated").  A run
+# without it deletes the files and the markers.
 if [ "$RW" != write ]; then	# a run that reads: every file written whole first, then a rest
-	for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' | clput /tmp/twoport-fill-$p.fio; done
-	for p in $PORTS; do cl "fio /tmp/twoport-fill-$p.fio > /tmp/twoport-fill-$p.out 2>&1" & done; wait
-	echo "files written before the run: $(cl "du -sch /mnt/rxr-*/f-* | tail -1")" | tee -a geometry.txt
-	sleep ${FILL_REST:-20}	# FILL_REST: the rest after the fill (3 for a quick strobe)
+	for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' > fill-$p.fio; done
+	FILLSUM=$(cat $(for p in $PORTS; do echo fill-$p.fio; done) | md5sum | cut -c1-32)
+	filled=1
+	for p in $PORTS; do for fs in ${FS[$p]}; do
+		[ "$(cat $fs/zcbudget/.twoport-filled 2>/dev/null)" = "$FILLSUM" ] || filled=0
+	done; done
+	if [ "${KEEP_FILES:-0}" = 1 ] && [ $filled = 1 ]; then
+		echo "files kept from the last run: $(cl "du -sch /mnt/rxr-*/f-* | tail -1")" | tee -a geometry.txt
+	else
+		for p in $PORTS; do for fs in ${FS[$p]}; do rm -f $fs/zcbudget/.twoport-filled; done; done
+		for p in $PORTS; do clput /tmp/twoport-fill-$p.fio < fill-$p.fio; done
+		for p in $PORTS; do cl "fio /tmp/twoport-fill-$p.fio > /tmp/twoport-fill-$p.out 2>&1" & done; wait
+		echo "files written before the run: $(cl "du -sch /mnt/rxr-*/f-* | tail -1")" | tee -a geometry.txt
+		[ "${KEEP_FILES:-0}" = 1 ] && for p in $PORTS; do for fs in ${FS[$p]}; do echo $FILLSUM > $fs/zcbudget/.twoport-filled; done; done
+		sleep ${FILL_REST:-20}	# FILL_REST: the rest after the fill (3 for a quick strobe)
+	fi
 fi
 # After the ports are placed: settled.sh place pins nfsd to its settled CPUs.
 [ -n "${NFSD_CPUS:-}" ] && { for t in $(pgrep -x nfsd); do taskset -cp $NFSD_CPUS $t > /dev/null 2>&1; done; echo "nfsd on CPUs $NFSD_CPUS for this run" | tee -a geometry.txt; }
@@ -482,7 +503,12 @@ DRIVES="$(data_drives)" "$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 
 "$RIG/wiresample.py" wire-sec.tsv $(( WARM + RUNTIME + 3 )) $(for p in $PORTS; do echo ${DEV[$p]}; done) &	# the same seconds, row for row
 cl "for i in \$(seq $(( WARM + RUNTIME + 5 ))); do echo \$(date +%s.%N) \$(awk '/^Tcp:/ && !h {for (i = 1; i <= NF; i++) if (\$i == \"RetransSegs\") c = i; h = 1; next} /^Tcp:/ {print \$c}' /proc/net/snmp); sleep 1; done" > client-sec.tsv 2>&1 &
 for p in $PORTS; do
-	cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p[0-9]*/f-*" &
+	if [ "${KEEP_FILES:-0}" = 1 ] && [ "$RW" != write ]; then
+		cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio" &
+	else
+		cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p[0-9]*/f-*" &
+		for fs in ${FS[$p]}; do rm -f $fs/zcbudget/.twoport-filled; done
+	fi
 done
 W=$(( RUNTIME - 50 )); [ $W -lt 10 ] && W=10
 LEAD=25; [ $(( LEAD + W + 3 )) -gt $RUNTIME ] && LEAD=$(( (RUNTIME - W) / 2 ))	# a short run: the window in its middle

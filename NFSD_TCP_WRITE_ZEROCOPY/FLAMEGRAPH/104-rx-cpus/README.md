@@ -2489,3 +2489,27 @@ keeps the zero-copy send but frees each reply's pages at completion as
 before, the cache always full.  `ab-recycle.sh 797:0 798:1 799:512`
 (the locked READ pass): if 1 is as slow as 512, the zero-copy send is
 the cause; if as fast as 0, the recycled pages are.
+
+Mike: "why are these taking so long?  they were meant to be quick strobe
+right?  and the file read shouldn't be recreated?".  The locked pass
+(`read-check.sh`: trim, 120 s rest, 10 + 40 s) was used for 0, 1 and
+512; every read run of `twoport.sh` also wrote all its 17 GB of files
+before its load and deleted them after.  `t2-r797` (0) ran its load
+(the drives read 8.5 to 9.1 GB/s each), but `twoport.sh` and
+`ab-recycle.sh` were edited while it ran, so its report broke (fio's JSON
+read with text after it: "total 0.00"; fio's own totals, 34.24 + 31.96 =
+66.2 GB/s, are not the rig's figure) and `ab-recycle.sh` failed after it.
+Its teardown ran: no export, connection, mount or fio was left, the
+settled setting held.  r798 stopped at the stop file.  (Never edit a
+script a running step is reading.)
+
+- **`twoport.sh` `KEEP_FILES=1`**: a read run keeps its files for the
+  next and skips the fill when every export holds the marker
+  (`zcbudget/.twoport-filled`) of a fill from the same fio job files; a
+  run without it deletes the files and the markers.
+- **`ab-recycle.sh` `STROBE=1`**: the quick strobe (`client-read.sh`: no
+  trim, 30 s rest, 5 + 25 s) with `KEEP_FILES=1`, in place of the
+  locked pass.
+
+Next: `STROBE=1 ab-recycle.sh 800:0 809:1 810:512` (801 to 808 stay the
+next boot's).  The first fills the files; the two after it read them.
