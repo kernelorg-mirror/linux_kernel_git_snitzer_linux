@@ -2826,3 +2826,14 @@ The drives (104.58 alone), the wire (98.31 alone) and memory (about 140
 mixed) all leave room above 73: what holds NFS READs is NFS's own path,
 the calls' 3.4 ms unread at the server for their connection's work item
 (t2-r774) and the connections that share a CPU (r817's mountstats).
+
+## The work items' cost at N (Mike, 17 November: "profile the work items at N to cut the per-READ cost")
+
+From t2-r779 (the same kernel, `sunrpc.ko` and setting): the zone lock in
+`rmqueue_bulk` 4.99% of the work items' samples spinning and 2.06% in its
+list checks; `lock_sock_nested` 4.57% spinning (the ring CPUs' ACK
+processing holds the socket); `CONFIG_DEBUG_LIST=y` 2.97% in all.  The
+per-CPU page lists are `high` 874 and `batch` 15 pages, against 16 a READ.
+
+About to run, through `step.sh`: [pcp-strobe.sh](pcp-strobe.sh) `818 8`,
+`vm.percpu_pagelist_high_fraction` 8 for the strobe, put back after.
