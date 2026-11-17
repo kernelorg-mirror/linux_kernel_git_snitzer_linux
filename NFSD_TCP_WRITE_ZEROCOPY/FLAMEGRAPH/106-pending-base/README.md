@@ -279,3 +279,40 @@ build directories were deleted (every `.ko`, source, symbol list and
 log kept), and root has 2.7 GB.  The 13 GB
 `/root/nvme0-backup-2026-10-17` and the 2.5 GB journal are left.
 The chain runs again as planned.
+
+**t2-r848, the WRITE pass: PASS, 78.14 GB/s**, no drive stepped down,
+new kernel warnings 0.  **t2-r849, the READ pass: PASS, 73.12 GB/s**,
+new kernel warnings 0.  It filled its files again (17 GB): `twoport.sh`
+deletes a write run's files after its load whatever `KEEP_FILES` says
+(the keep applies only to runs that read), so `write-check.sh`'s
+`KEEP_FILES=1` does nothing yet; fixed after this A/B.
+
+**The A/B: the promised count at 1 MiB reads 75.18 GB/s at 0.74
+memory bytes a byte.**  New kernel warnings 0 in each.
+
+| run | bound | GB/s | DMA | memory | a byte | cache fills | not sent | below TCP | Send-Q | held | waiting for the NIC | cycles a KiB | held back |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| contrast-c6, fio and iperf3 mixed | | | 137.6 | 140.8 | | | | | | | | | |
+| t2-r853, settled | 0 | 71.42 | 142.8 | 100.6 | 1.41 | 83.7 | 0.09 MB | 0.13 MB | 0.43 MB | 13 MB | 5 MB | 389 / 206 / 595 | 0 |
+| t2-r850, pending | 1 MiB | **75.18** | **150.4** | **55.7** | **0.74** | 86.5 | 0.20 MB | 0.06 MB | 0.32 MB | 12 MB | 8 MB | 486 / 156 / 643 | 6430134 |
+| t2-r851, pending | 512 KiB | 51.23 | 102.5 | 9.2 | 0.18 | 59.0 | 0.02 MB | 0.03 MB | 0.11 MB | 4 MB | 2 MB | 552 / 188 / 740 | 5628814 |
+| t2-r852, pending | 256 KiB | 39.07 | 78.1 | 2.5 | 0.06 | 45.0 | 0.01 MB | 0.02 MB | 0.07 MB | 3 MB | 1 MB | 567 / 215 / 782 | 4473150 |
+
+- **Against the frame:** at 1 MiB NFS moves 150.4 GB/s of DMA through
+  55.7 GB/s of memory, the NIC reading nearly every reply from the
+  cache, where fio and iperf3 mixed moved 137.6 through 140.8 and the
+  settled setting 142.8 through 100.6.  Against the same bound without
+  the count (t2-r837, 63.08 at 131.8 GB/s, 2.09 a byte): +19%, and 76
+  GB/s less memory.  Against the settled setting on the same stack and
+  in the same shape: +5.3%, with half its memory traffic.
+- **The bound now caps what it names, so its value matters.**  A
+  connection at 512 KiB has about two 256 KiB READs in flight, at 256
+  KiB one: they starve (51.23 and 39.07), with almost no memory
+  traffic.  The rate climbs with what a connection may hold, and 1 MiB
+  is still climbing: 1.5 and 2 MiB come next (Mike: "run the 1.5 MiB
+  and 2 MiB sweep after this"), with 1 MiB run again for its spread.
+- The work CPUs spend more at 1 MiB (486 a KiB against the settled
+  389): 6.4 M holds, about 0.75 a READ; the rings less (156 against
+  206).
+- t2-r853 on this stack against t2-r847 on the last: 71.42 and 70.07,
+  so the rebuilt stack leaves the settled setting as it was.
