@@ -188,3 +188,23 @@ During a run twoport.sh sets the client's workqueue
 `default_affinity_scope` to numa (`CLI_SCOPE`, since 7 November) and
 puts it back after; on build 541 the default is cache_shard, so
 xprtiod runs at numa as on build 469.
+
+| Run, client build 541 | in flight | M IOPS (a / b) | completion mean / p99 | server busy (busiest) | client busy (busiest) |
+|---|---|---|---|---|---|
+| t2-r883, iodepth 32 | 768 a port | 1.81 (0.90 / 0.91) | 0.85 / 3.03 ms | 54% (90%) | 61% (75%) |
+| t2-r884, iodepth 32 | 768 a port | 1.81 (0.89 / 0.92) | 0.86 / 2.97 ms | 54% (87%) | 62% (68%) |
+| t2-r885, iodepth 32 | 768 a port | 1.86 (0.93 / 0.92) | 0.82 / 2.97 ms | 56% (89%) | 63% (69%) |
+| t2-r886, iodepth 32, profiled | 768 a port | 1.82 (0.88 / 0.94) | 0.87 / 3.00 ms | 56% (92%) | 61% (71%) |
+
+- **The canary-WIP client: 1.81 M IOPS median and minimum, 72% over
+  build 469's 1.05**, at the same load.  The client is no longer the
+  limit (61 to 63% busy); one server CPU is at 87 to 92% in every run.
+  New kernel warnings 0 in all four.
+- t2-r886's client half is empty: the client has no `perf` since its
+  new kernel (round 107 had one).  `perf` 7.1.13 (the
+  `perf-7.1.13-21.hs.460.el9` package in the client's
+  `/root/snitm/git/kernel-rpmtree/`, `rpm -i --test` clean) is
+  installed on the client for the profile, the only change to it, and
+  `prof4k.sh` runs again as t2-r887:
+
+      cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r108 prof4k-wip2 ../FLAMEGRAPH/108-4k-randread/prof4k.sh 887
