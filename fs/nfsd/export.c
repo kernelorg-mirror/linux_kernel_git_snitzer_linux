@@ -18,6 +18,7 @@
 #include <linux/exportfs.h>
 #include <linux/sunrpc/svc_xprt.h>
 #include <net/genetlink.h>
+#include <kunit/visibility.h>
 #include <uapi/linux/nfsd_netlink.h>
 
 #include "nfsd.h"
@@ -76,9 +77,11 @@ static void expkey_request(struct cache_detail *cd,
 	(*bpp)[-1] = '\n';
 }
 
+#if !IS_ENABLED(CONFIG_KUNIT)
 static struct svc_expkey *svc_expkey_update(struct cache_detail *cd, struct svc_expkey *new,
 					    struct svc_expkey *old);
 static struct svc_expkey *svc_expkey_lookup(struct cache_detail *cd, struct svc_expkey *);
+#endif
 
 static int expkey_parse(struct cache_detail *cd, char *mesg, int mlen)
 {
@@ -262,7 +265,7 @@ static int expkey_notify(struct cache_detail *cd, struct cache_head *h)
 	return nfsd_cache_notify(cd, h, NFSD_CACHE_TYPE_EXPKEY);
 }
 
-static const struct cache_detail svc_expkey_cache_template = {
+VISIBLE_IF_KUNIT const struct cache_detail svc_expkey_cache_template = {
 	.owner		= THIS_MODULE,
 	.hash_size	= EXPKEY_HASHMAX,
 	.name		= "nfsd.fh",
@@ -292,7 +295,7 @@ svc_expkey_hash(struct svc_expkey *item)
 	return hash;
 }
 
-static struct svc_expkey *
+VISIBLE_IF_KUNIT struct svc_expkey *
 svc_expkey_lookup(struct cache_detail *cd, struct svc_expkey *item)
 {
 	struct cache_head *ch;
@@ -305,7 +308,7 @@ svc_expkey_lookup(struct cache_detail *cd, struct svc_expkey *item)
 		return NULL;
 }
 
-static struct svc_expkey *
+VISIBLE_IF_KUNIT struct svc_expkey *
 svc_expkey_update(struct cache_detail *cd, struct svc_expkey *new,
 		  struct svc_expkey *old)
 {
@@ -994,9 +997,11 @@ out_free:
 	return err;
 }
 
+#if !IS_ENABLED(CONFIG_KUNIT)
 static struct svc_export *svc_export_update(struct svc_export *new,
 					    struct svc_export *old);
 static struct svc_export *svc_export_lookup(struct svc_export *);
+#endif
 static int check_export(const struct path *path, int *flags,
 			unsigned char *uuid);
 
@@ -1780,7 +1785,7 @@ static struct cache_head *svc_export_alloc(void)
 	return &i->h;
 }
 
-static const struct cache_detail svc_export_cache_template = {
+VISIBLE_IF_KUNIT const struct cache_detail svc_export_cache_template = {
 	.owner		= THIS_MODULE,
 	.hash_size	= EXPORT_HASHMAX,
 	.name		= "nfsd.export",
@@ -1808,7 +1813,7 @@ svc_export_hash(struct svc_export *exp)
 	return hash;
 }
 
-static struct svc_export *
+VISIBLE_IF_KUNIT struct svc_export *
 svc_export_lookup(struct svc_export *exp)
 {
 	struct cache_head *ch;
@@ -1821,7 +1826,7 @@ svc_export_lookup(struct svc_export *exp)
 		return NULL;
 }
 
-static struct svc_export *
+VISIBLE_IF_KUNIT struct svc_export *
 svc_export_update(struct svc_export *new, struct svc_export *old)
 {
 	struct cache_head *ch;
