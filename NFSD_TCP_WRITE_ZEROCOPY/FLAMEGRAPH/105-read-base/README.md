@@ -360,3 +360,12 @@ read check filled new files and deleted them at the end.  Once t2-r830
 has ended, `read-check.sh` passes `KEEP_FILES=1` by default (the trim
 and rest as they are: `fstrim` discards only free blocks), and then
 `ab.sh 831:262144:0 832:262144:1048576 833:262144:524288` runs.
+
+**t2-r830, the READ pass: PASS, 72.48 GB/s** (37.63 on port a, 34.86
+on port b; ring drops 5 and 76), new kernel warnings 0.  Both passes
+the second fix owes are passed at the bound 0.
+
+`read-check.sh` passes `KEEP_FILES=1` by default from here.  t2-r830
+deleted its files, so the next read check fills again and the ones
+after it read those files.  Next, `ab.sh 831:262144:0
+832:262144:1048576 833:262144:524288`.

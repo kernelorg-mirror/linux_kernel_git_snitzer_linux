@@ -20,6 +20,12 @@
 # largest command (MDTS 6, max_hw_sectors_kb 256).  Build 534 read
 # 63.50 at rsize 1 MiB (t2-r734), 67.59 at 512 KiB (r736) and 73.47 at
 # 256 KiB (r737).  WARM, RUNTIME, REST, BS and RSIZE override.
+#
+# The files are kept from one read check to the next (twoport.sh's
+# KEEP_FILES, Mike, 17 November: reproducibility between read checks):
+# the first fills them and marks every export, the next read them as
+# they are.  The trim leaves them (fstrim discards only free blocks).
+# KEEP_FILES=0 fills new files and deletes them after.
 cd "$(dirname "$0")" || exit 1
 . ./common.sh
 n=${1:?read-check.sh <run number>}
@@ -34,7 +40,7 @@ ping -c1 -W2 192.168.1.106 > /dev/null && ping -c1 -W2 192.168.0.106 > /dev/null
 sync; [ "${TRIM:-1}" = 0 ] || for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep ${REST:-120}
 dmesg > $O/dmesg.0
 env FS_A="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" FS_B="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" \
-	WARM=${WARM:-10} RUNTIME=${RUNTIME:-40} RW=read BS=${BS:-1M} RSIZE=${RSIZE:-262144} RWTSV=$O/rw.tsv TAG=read-check \
+	WARM=${WARM:-10} RUNTIME=${RUNTIME:-40} RW=read BS=${BS:-1M} RSIZE=${RSIZE:-262144} KEEP_FILES=${KEEP_FILES:-1} RWTSV=$O/rw.tsv TAG=read-check \
 	WRITES=$TWO_WRITES BUDGET_PAGES=8198 ./twoport.sh $O/run ab > $O/run.log 2>&1 ||
 	{ say "run failed: $(grep -E 'BAD|FAILED|no answer|not free' $O/run.log | head -3)"; exit 1; }
 dmesg > $O/dmesg.1
