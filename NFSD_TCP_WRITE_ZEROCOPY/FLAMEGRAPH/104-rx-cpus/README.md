@@ -2873,4 +2873,18 @@ node in order and wraps to CPU 8, so it packed tonight's connections onto
 8 to 31.  The CPUs share no L2 (512 KiB each, `cache/index2`).  The same
 placement over N's spread is a setting: balance Y with `svc_rtc_cpus` at
 the 24 even CPUs 8 to 54, one connection to each.  About to run, through
-`step.sh`: `EXP_RTC_CPUS=8-54:2 PROBE=skbshape txdrain.sh 819 Y`.
+`step.sh`: `EXP_RTC_CPUS=8,10,...,54 PROBE=skbshape txdrain.sh 819 Y`.
+
+**t2-r819, one connection to each even CPU 8 to 54: 67.89 GB/s.**  Every
+connection on a CPU of its own over N's spread, and every transport
+even (115k to 119k sends), yet below every N run but r818: memory
+123.6 GB/s (1.82 bytes a byte, against N's 1.60), BQL 479 to 679 KiB
+in flight, an skb 72 us from transmit to consume (N 48), cycles a KiB
+416 / 213 / 629 (N 382 / 207 / 589).  **So no sharing is not the fix:**
+spread or packed, with every connection on its own CPU the replies
+reach the queues faster, wait longer and cost more memory a byte, as
+with Y.  At N the shared CPUs pace the client's reads but also hold
+back the offered load, and the two nearly cancel.  The placement is not
+written.  (The run's own settle after kept `EXP_RTC_CPUS`, inherited from
+the shell; `settled.sh apply` without it put `svc_rtc_cpus` back to
+8-55, balance N.)
