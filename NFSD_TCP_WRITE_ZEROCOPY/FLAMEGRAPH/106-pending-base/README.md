@@ -159,7 +159,10 @@ bound.**  New kernel warnings 0 in each.
   admitted before it was reached.
 - **Fewer sockets hold less in all, and that is what reads faster.**
   nconnect 12 at 512 KiB holds 39 MB against 62 at 16, reads 69.08
-  (best on the pending base, above the settled profile's 68.76), at
+  (best on the pending base; t2-r841's 68.76 is not its match: that run
+  was profiled, which costs the settled setting some 4 GB/s, against
+  the passes' 72.5 to 73.1, and the pending base almost none, t2-r842
+  64.55 against t2-r843 64.70), at
   1.82 bytes a byte, the most cache fills (78.4) and the fewest cycles
   (601).  Each socket holds about the same (1.42 MB): the total is the
   lever.
@@ -204,3 +207,11 @@ admits no READ whose data would only wait in TCP: the backlog stays as
 unread calls in the socket, which hold no pages.  Then the base's
 `tcp_limit_output_bytes` 256 KiB is A/B'd again (against 1 MiB), since
 the backlog it makes in TCP is the one the cache sees.
+
+**Correction (Mike: "are they comparing same thing?"):** no.  t2-r841
+was profiled (`perf record` on every CPU at 999 Hz, the client's too)
+and the A/B runs were not; against the settled setting unprofiled
+(about 73) nconnect 12 on the pending base is some 4 GB/s short, not
+above it.  The settled row of the frame is taken again unprofiled in
+`ab.sh`'s shape: `t2-r847`, `client-read.sh` at the settled setting
+with the same memory counters.
