@@ -17,6 +17,6 @@ H=$(cd "$(dirname "$0")" && pwd); O=/var/tmp/zc-run-logs/t2-r$n; mkdir -p $O; rm
 EXP_RTC_BALANCE=$b KEEP_FILES=1 SRV=txdrain $H/client-read.sh $n; rc=$?
 wait
 # client-read.sh's own apply after the run kept EXP_RTC_BALANCE: settle again
-(cd ../../xeu-rig && ./settled.sh apply > $O/apply-settled.txt 2>&1; echo "settled again: $(tail -1 $O/apply-settled.txt)")
+(cd $H/../../xeu-rig && ./settled.sh apply > $O/apply-settled.txt 2>&1; echo "settled again: $(tail -1 $O/apply-settled.txt)")
 awk '{l[$2" "$3]+=$5; f[$2" "$3]+=$7; c[$2" "$3]++} END {for (q in c) printf "%s: limit %.0f KiB, in flight %.0f KiB (mean of %d)\n", q, l[q]/c[q]/1024, f[q]/c[q]/1024, c[q]}' $O/bql.txt | sort
 exit $rc
