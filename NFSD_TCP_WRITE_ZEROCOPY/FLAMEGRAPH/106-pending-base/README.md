@@ -389,3 +389,9 @@ change are t2-r858 and t2-r859, which ran these same values through
 `pending-settled.sh`'s overrides; from here the settled rows of
 `ab.sh` (`<n>:settled`) are this setting, and rows before it
 (t2-r847, t2-r853) are the old one.
+
+**A profile at the new settled setting** (Mike: "profile a run at the
+new settled setting").  About to run: `prof.sh 860 settled` through
+`step.sh /var/tmp/zc-run-logs/r106-promise`, `settled` now being the
+1.5 MiB bound and round 105's base, to set beside t2-r841 (the old
+setting) and t2-r842 (the base at 512 KiB, before the count).
