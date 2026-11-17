@@ -260,3 +260,12 @@ try it, `STACK=/var/tmp/zc-run-logs/svcstack-promise-534/stack
 SUNRPC_KO=none swap-sunrpc.sh` with no client connected, the passes at
 the settled setting (bound 0), then `ab.sh` on the pending base with
 the bound at 1 MiB, 512 and 256 KiB and `847:settled` beside them.
+
+### The promised count on the rig (17 November, about 08:45)
+
+Mike: "yes, swap it in, run the passes and A/B".  About to run, each
+through `xeu-rig/step.sh /var/tmp/zc-run-logs/r106-promise NAME ...`:
+`swap` (`STACK=/var/tmp/zc-run-logs/svcstack-promise-534/stack
+SUNRPC_KO=none swap-sunrpc.sh`, sunrpc `CFADF668BD58CB4A39A77E0`
+after), `settled`, `write-check.sh 848`, `read-check.sh 849`, then
+`ab.sh 850:1048576:16 851:524288:16 852:262144:16 853:settled`.
