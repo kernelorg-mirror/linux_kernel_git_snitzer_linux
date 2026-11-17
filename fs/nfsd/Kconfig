@@ -59,6 +59,19 @@ config NFSD_RTC_KUNIT_TEST
 	  linked into nfsd itself, so a modular build runs them when nfsd
 	  loads.
 
+config NFSD_EXPORT_BORROW_KUNIT_TEST
+	tristate "KUnit tests for the per-thread NFSv3 export borrow" if !KUNIT_ALL_TESTS
+	depends on KUNIT && NFSD
+	default KUNIT_ALL_TESTS
+	help
+	  Test that an nfsd thread lends its cached export to an NFSv3
+	  file handle only while its key matches and both cache entries
+	  are fresh, that every flush, purge, replacement and expiry
+	  misses, that drains and thread exit drop the thread's
+	  references, and that every borrow is returned once.  The tests
+	  are linked into nfsd itself, so a modular build runs them when
+	  nfsd loads.
+
 config NFSD4_BVEC_KUNIT_TEST
 	tristate "KUnit tests for NFSDv4 immutable receive bvecs" if !KUNIT_ALL_TESTS
 	depends on KUNIT
