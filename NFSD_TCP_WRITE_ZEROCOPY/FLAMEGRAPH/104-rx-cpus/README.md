@@ -2788,3 +2788,6 @@ r817).  The lever is the share of a reply the NIC reads while it is
 still in the cache.  NFS's cycles (589 a KiB against 354 for the two
 devices' own work) are not what holds it: its CPUs are not saturated
 except where two connections share one.
+
+About to run (Mike: "run the both-at-once test with fio capped at 50
+GB/s"): `FIORATE=6250000000 contrast.sh c4 both`, 6.25 GB/s a drive.

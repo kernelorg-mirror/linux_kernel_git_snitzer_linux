@@ -9,7 +9,8 @@
 # with no NFS between them.  5 s of the window: every CPU's cycles and the
 # mesh's memory requests and cache fills; the drives' rate from fio, the
 # wire's from the ports' tx_bytes over the same 5 s.  No NFS client may be
-# connected.  Files are only read.
+# connected.  Files are only read.  FIORATE=<bytes a second> caps each
+# drive's reader (fio --rate).
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 L=${1:?contrast.sh <label> <fio|iperf|both>} M=${2:?}
 O=/var/tmp/zc-run-logs/contrast-$L; mkdir -p $O
@@ -28,7 +29,7 @@ J=$(fiojob) || exit 1
 case $M in fio|iperf|both) ;; *) say "fio, iperf or both"; exit 1;; esac
 if [ $M != fio ]; then ZC=1 ./iperf-tx.sh ab 16 30 > $O/iperf.out 2>&1 & sleep 6; fi
 if [ $M != iperf ]; then
-	fio --ioengine=libaio --direct=1 --rw=read --bs=1M --numjobs=1 --iodepth=16 \
+	fio --ioengine=libaio --direct=1 --rw=read --bs=1M --numjobs=1 --iodepth=16 ${FIORATE:+--rate=$FIORATE} \
 		--time_based --ramp_time=3 --runtime=18 --output-format=json --output=$O/fio.json $J > /dev/null 2>&1 &
 fi
 sleep 8
