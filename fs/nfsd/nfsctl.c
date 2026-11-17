@@ -2536,6 +2536,9 @@ int nfsd_nl_cache_flush_doit(struct sk_buff *skb, struct genl_info *info)
 	    nn->svc_expkey_cache)
 		cache_purge(nn->svc_expkey_cache);
 
+	/* purges move no flush_time: drop what idle nfsd threads cache */
+	nfsd_exp_slots_drain();
+
 	mutex_unlock(&nn->nfsd_mutex);
 
 	return 0;

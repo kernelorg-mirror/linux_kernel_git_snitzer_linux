@@ -83,6 +83,7 @@ typedef struct svc_fh {
 	int			fh_maxsize;	/* max size for fh_handle */
 	struct dentry *		fh_dentry;	/* validated dentry */
 	struct svc_export *	fh_export;	/* export pointer */
+	struct nfsd_exp_slot	*fh_exp_slot;	/* set: fh_export lent, no ref */
 
 	bool			fh_want_write;	/* remount protection taken */
 	bool			fh_no_wcc;	/* no wcc data needed */

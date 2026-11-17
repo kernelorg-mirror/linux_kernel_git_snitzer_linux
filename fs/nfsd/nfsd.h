@@ -58,6 +58,33 @@ extern atomic_t			nfsd_th_cnt;		/* number of available threads */
 
 extern const struct seq_operations nfs_exports_op;
 
+/*
+ * One cached export per nfsd thread, for NFSv3 requests from an AUTH_SYS
+ * or AUTH_NULL client.  The slot holds its own reference on one
+ * svc_expkey and on the svc_export it resolves to; a request whose key
+ * matches borrows that export for the life of its svc_fh instead of
+ * looking it up and taking and dropping shared references.
+ *
+ * @lock guards @borrowed and @dead.  While @borrowed is set only the owner
+ * thread reads or changes the key and the pair; while it is clear only
+ * a drain, under @lock, may move them out.  See export.c.
+ */
+struct nfsd_exp_slot {
+	spinlock_t		lock;		/* guards borrowed, dead */
+	bool			borrowed;	/* an export is lent out */
+	bool			dead;		/* drained while borrowed */
+	bool			enabled;	/* an nfsd() thread's slot */
+	bool			registered;	/* on the drain list (owner) */
+	u8			fsid_type;
+	u32			fsid[6];
+	struct net		*net;
+	struct auth_domain	*client;	/* compared only; ek pins it */
+	struct cache_detail	*ekcd;
+	struct svc_expkey	*ek;
+	struct svc_export	*exp;
+	struct list_head	link;
+};
+
 struct nfsd_thread_local_info {
 	struct nfs4_client	**ntli_lease_breaker;
 	int			ntli_cachetype;
@@ -66,6 +93,8 @@ struct nfsd_thread_local_info {
 	/* the decode's raised copy of ntli_fh_base (nfsd_set_fh_dentry()) */
 	const struct cred	*ntli_fh_base;
 	const struct cred	*ntli_fh_cred;
+	/* nfsd() threads only: rtc pool contexts never borrow */
+	struct nfsd_exp_slot	ntli_exp_slot;
 };
 
 /*
