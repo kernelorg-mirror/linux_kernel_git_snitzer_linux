@@ -181,3 +181,23 @@ mpstat on both ends, the client's memory controllers and 5 s of its
 call chains.  About to run through `step.sh /var/tmp/zc-run-logs/r107
 write`: `ab-write.sh 868:libaio 869:io_uring:fixed 870:libaio
 871:io_uring:fixed`.
+
+**The WRITE A/B: the engine does not move WRITEs; the drives hold
+them.**  All four passed, no drive stepped down, new kernel warnings 0.
+
+| run | engine | GB/s | client busy | server busy | client memory a byte | memcpy | pinning | submission | send |
+|---|---|---|---|---|---|---|---|---|---|
+| t2-r868 | libaio | 77.73 | 49% / 50% | 31% | 2.17 | 0.10% | 1.24% | 8.72% | 2.90% |
+| t2-r869 | io_uring, `fixedbufs=1` | 77.79 | 47% / 49% | 31% | 2.18 | under 0.1% | under 0.1% | 7.19% | 2.96% |
+| t2-r870 | libaio | 77.86 | 50% / 50% | 32% | 2.16 | 0.10% | 1.23% | 9.15% | 1.47% |
+| t2-r871 | io_uring, `fixedbufs=1` | 77.91 | 48% / 48% | 32% | 2.17 | 0.10% | under 0.1% | 7.15% | 2.92% |
+
+- The client does not copy a WRITE (`memcpy` 0.10%), and registered
+  buffers take out its pinning (1.2%) and a sixth of its submission, a
+  client 1 to 2 points less busy; the rate is the same (77.73 to 77.91,
+  the engines interleaved).
+- Neither end is busy (client about half, server a third).  The
+  drives are: each writes 9.7 to 9.8 GB/s at 98% busy (t2-r871).
+- The client's 2.17 bytes of memory a byte written, with no copy, is
+  not explained yet.
+- The WRITE pass stays on libaio.
