@@ -18,6 +18,7 @@
 #include <linux/percpu_counter.h>
 #include <linux/skbuff.h>
 #include <linux/sunrpc/msg_prot.h>
+#include <linux/sunrpc/svcauth.h>
 #include <linux/sunrpc/svcsock.h>
 #include <linux/unaligned.h>
 
@@ -10027,6 +10028,148 @@ static struct kunit_suite svcsock_rx_test_suite = {
 };
 
 kunit_test_suite(svcsock_rx_test_suite);
+
+/*
+ * svc_authenticate() and svc_authorise() get and put the call's auth flavor
+ * ops.  A flavor sunrpc itself provides must not touch sunrpc's module
+ * refcount, and a flavor another module provides must pin that module from
+ * get to put.
+ */
+#define SVCAUTH_REF_ROUNDS	1024
+
+static void svcauth_builtin_flavor_takes_no_module_ref(struct kunit *test)
+{
+	static const rpc_authflavor_t flavors[] = {
+		RPC_AUTH_NULL, RPC_AUTH_UNIX, RPC_AUTH_TLS,
+	};
+	unsigned int f, i;
+
+	for (f = 0; f < ARRAY_SIZE(flavors); f++) {
+		struct auth_ops *aops = svc_get_auth_ops(flavors[f]);
+		struct module *owner;
+
+		KUNIT_ASSERT_NOT_NULL(test, aops);
+		KUNIT_EXPECT_EQ(test, aops->flavour, flavors[f]);
+		KUNIT_EXPECT_FALSE(test, svc_auth_ops_needs_module_ref(aops));
+		owner = aops->owner;
+		svc_put_auth_ops(aops);
+
+#if IS_ENABLED(CONFIG_MODULE_UNLOAD)
+		/*
+		 * sunrpc built in has no module and no refcount to watch;
+		 * the decision above is then the whole check.
+		 */
+		if (!owner)
+			continue;
+
+		/*
+		 * Other RPC traffic may move the count meanwhile, so hold
+		 * SVCAUTH_REF_ROUNDS gets at once: a per-call reference
+		 * would move it by that many, and live traffic by far less
+		 * than half of it in either direction.
+		 */
+		{
+			int before, held, after;
+
+			before = module_refcount(owner);
+			for (i = 0; i < SVCAUTH_REF_ROUNDS; i++)
+				KUNIT_ASSERT_PTR_EQ(test,
+						    svc_get_auth_ops(flavors[f]),
+						    aops);
+			held = module_refcount(owner);
+			for (i = 0; i < SVCAUTH_REF_ROUNDS; i++)
+				svc_put_auth_ops(aops);
+			after = module_refcount(owner);
+
+			KUNIT_EXPECT_LT(test, abs(held - before),
+					SVCAUTH_REF_ROUNDS / 2);
+			KUNIT_EXPECT_LT(test, abs(after - held),
+					SVCAUTH_REF_ROUNDS / 2);
+			/*
+			 * module_put() stops at zero, so unbalanced puts show
+			 * as a count below zero, never as a delta of 1024.
+			 */
+			KUNIT_EXPECT_GE(test, after, 0);
+		}
+#else
+		(void)owner;
+		(void)i;
+#endif
+	}
+}
+
+#if IS_ENABLED(CONFIG_MODULE_UNLOAD)
+static struct module svcauth_kunit_foreign_owner = {
+	.state = MODULE_STATE_LIVE,
+	.name = "svcauth_kunit_foreign",
+};
+
+/* A stray AUTH_DES call while the test flavor is registered is refused. */
+static enum svc_auth_status svcauth_kunit_foreign_accept(struct svc_rqst *rqstp)
+{
+	rqstp->rq_auth_stat = rpc_autherr_badcred;
+	return SVC_DENIED;
+}
+
+static int svcauth_kunit_foreign_release(struct svc_rqst *rqstp)
+{
+	return 0;
+}
+
+static struct auth_ops svcauth_kunit_foreign_ops = {
+	.name		= "kunit-foreign",
+	.flavour	= RPC_AUTH_DES,
+	.accept		= svcauth_kunit_foreign_accept,
+	.release	= svcauth_kunit_foreign_release,
+};
+#endif
+
+static void svcauth_foreign_flavor_pins_owner(struct kunit *test)
+{
+#if IS_ENABLED(CONFIG_MODULE_UNLOAD)
+	struct module *owner = &svcauth_kunit_foreign_owner;
+	struct auth_ops *aops;
+
+	/* a live, unreferenced module: MODULE_REF_BASE (1) in kernel/module */
+	atomic_set(&owner->refcnt, 1);
+	svcauth_kunit_foreign_ops.owner = owner;
+	if (svc_auth_register(RPC_AUTH_DES, &svcauth_kunit_foreign_ops))
+		kunit_skip(test, "RPC_AUTH_DES slot already registered");
+
+	KUNIT_EXPECT_TRUE(test,
+			  svc_auth_ops_needs_module_ref(&svcauth_kunit_foreign_ops));
+	aops = svc_get_auth_ops(RPC_AUTH_DES);
+	KUNIT_EXPECT_PTR_EQ(test, aops, &svcauth_kunit_foreign_ops);
+	KUNIT_EXPECT_EQ(test, module_refcount(owner), 1);
+	if (aops)
+		svc_put_auth_ops(aops);
+	KUNIT_EXPECT_EQ(test, module_refcount(owner), 0);
+
+	/* a module on its way out is not handed to a new call */
+	owner->state = MODULE_STATE_GOING;
+	KUNIT_EXPECT_NULL(test, svc_get_auth_ops(RPC_AUTH_DES));
+	KUNIT_EXPECT_EQ(test, module_refcount(owner), 0);
+	owner->state = MODULE_STATE_LIVE;
+
+	svc_auth_unregister(RPC_AUTH_DES);
+	synchronize_rcu();
+#else
+	kunit_skip(test, "needs CONFIG_MODULE_UNLOAD to count module references");
+#endif
+}
+
+static struct kunit_case svcauth_modref_test_cases[] = {
+	KUNIT_CASE(svcauth_builtin_flavor_takes_no_module_ref),
+	KUNIT_CASE(svcauth_foreign_flavor_pins_owner),
+	{}
+};
+
+static struct kunit_suite svcauth_modref_test_suite = {
+	.name = "sunrpc-svcauth-modref",
+	.test_cases = svcauth_modref_test_cases,
+};
+
+kunit_test_suite(svcauth_modref_test_suite);
 
 MODULE_DESCRIPTION("KUnit tests for SUNRPC TCP receive ownership");
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
