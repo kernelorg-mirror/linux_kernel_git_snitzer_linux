@@ -2808,3 +2808,21 @@ same place as c4.
 About to run (Mike: "run fio capped at 60 and 70 with iperf"):
 `contrast.sh c5 both` at `FIORATE=7500000000` (60 GB/s) and `c6` at
 `8750000000` (70).
+
+| run | drives cap | drives | wire | DMA | memory GB/s | memory a byte of DMA |
+|---|---|---|---|---|---|---|
+| `contrast-c4` | 50 | 50.00 | 94.01 | 144.0 | 119.8 | 0.83 |
+| `contrast-c5` | 60 | 60.00 | 88.03 | 148.0 | 134.3 | 0.91 |
+| `contrast-c6` | 70 | 70.00 | 67.59 | 137.6 | 140.8 | 1.02 |
+| `t2-r815`, NFS at N | | 73.02 | 73.02 | 146.0 | 116.5 | 0.80 |
+
+**Memory is not the wall for NFS READs at N.**  As the drives take more,
+memory climbs to 140.8 GB/s (c6, where the wire falls to 67.59 to make
+room): the mixed ceiling is about 140, near the 148 one way, not the
+120 to 123 of c3 and c4.  NFS at N uses 116.5 at 73 GB/s, 1.60 bytes a
+byte sent: 80 GB/s at that is 128 GB/s, inside it, and 140 at 1.60 is
+87.5 GB/s.  So the "1.54 or less" above, taken from c3's 123, is wrong.
+The drives (104.58 alone), the wire (98.31 alone) and memory (about 140
+mixed) all leave room above 73: what holds NFS READs is NFS's own path,
+the calls' 3.4 ms unread at the server for their connection's work item
+(t2-r774) and the connections that share a CPU (r817's mountstats).
