@@ -152,3 +152,20 @@ t2-r875 to r877 with both ends recorded.
   16%; the largest self costs are the scheduler's switch (7%) and
   softirqs (5%), then `sunrpc_cache_find_rcu` and
   `svcauth_unix_set_client` at 1% each.
+
+## The client on the canary-WIP tip (build 541)
+
+17 November, 19:45: the client booted `7.3.3-16.hs.541.canary.el9.x86_64`,
+Mike's build of the canary-WIP tip.  Read on it, nothing changed:
+rpciod `per_cpu` 1, xprtiod unbound (`affinity_scope` default,
+cache_shard), `sunrpc.xprt_numa_map` Y, `nfs.nowait_writable` N, both
+ports at MTU 9000 and answering.  The commits of `IOPS.md`'s table are
+in it: `INLINE_OK` in the sunrpc task flags' format,
+`rpc_sleep_move_timeout`, `rpc_xprt_switch_update_cpu_map_locked`,
+`rpc_clnt_alloc_task_shards`, `rpc_xprt_numa_assign` in its symbols.
+The server is as it was, at the settled setting.  The plan, as the
+handoff in `IOPS.md` has it:
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r108 iops-wip ./settled-iops.sh run \
+        ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 881:32 882:32 883:32
+    ./step.sh /var/tmp/zc-run-logs/r108 prof4k-wip ../FLAMEGRAPH/108-4k-randread/prof4k.sh 884
