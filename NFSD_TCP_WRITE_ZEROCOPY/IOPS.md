@@ -313,3 +313,19 @@ client `7.3.3-16.hs.541.canary.el9.x86_64`:
 
 Still open: `nvme8`'s timeouts (the FAT dirty bit on `nvme8n1p1`
 again, at 22:30 and 22:33).
+
+The tip's stack for 541 (Mike, 17 November, 23:00): `build-svcstack.sh`
+from `9a2433060ea3a` into `/var/tmp/svcstack-541-9a2433060ea3a/stack`,
+against `4c8aa21d29987` (541's source; only
+`include/linux/sunrpc/svcauth.h` differs in `include/`).  Every
+module's imports match 541's exports and the stack's, none at another
+version; sunrpc keeps all 446 of 541's exports at their versions.
+srcversions: sunrpc `7A2D473DDE10AB1E01D4BB3`, nfsd
+`10AE6D2903DB88D99FB4A23`, lockd `E80CADD7B3A4CF927760A78`.  Next, with
+no NFS connection up: `swap-sunrpc.sh` with `STACK=` that set and
+`SUNRPC_KO=none` through `step.sh`, then `settled.sh apply`.
+
+The root drive's hang left `refs/remotes/origin/kernel-7.3/canary-WIP`
+empty (written 22:14), with `FETCH_HEAD` and `MERGE_RR`; the ref is
+removed, and the pack and every loose object written since 20:00
+check out.
