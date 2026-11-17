@@ -228,6 +228,8 @@ struct svc_rtc_conn {
 	struct llist_head	done;
 	/* calls parked on async I/O; raised only by the work item */
 	atomic_t		parked;
+	/* their replies' bytes (rq_reserved at park), for svc_rtc_send_max */
+	atomic_long_t		parked_bytes;
 };
 
 /*
@@ -266,6 +268,7 @@ struct svc_rtc_rqst {
 	struct list_head	all;
 	bool			queued;	/* reply on the send FIFO */
 	bool			parked;	/* counted in conn and pool ->parked */
+	unsigned int		promised;	/* in conn->parked_bytes */
 };
 
 struct svc_rtc_pool {

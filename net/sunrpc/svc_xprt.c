@@ -1606,28 +1606,45 @@ MODULE_PARM_DESC(svc_rtc_send_max,
 		 "Bytes a connection's TCP send queue may hold before its run-to-completion work item takes another call (0: no bound)");
 
 /*
- * Whether @xprt's send queue holds @max bytes or more.  If it does, the
- * socket is marked SOCK_NOSPACE, so that TCP calls svc_write_space() as
- * ACKs shrink the queue.
+ * The bytes @conn holds against svc_rtc_send_max: its socket's send
+ * queue, and the replies its parked calls have promised.  A READ's pages
+ * are written by the drive while it is parked and wait for the NIC from
+ * its completion until they are sent, so a reply counts from its call's
+ * park: a connection then admits no READ whose data would only wait in
+ * TCP, and the backlog stays as calls unread in the socket, which hold no
+ * pages.  A reply counted twice between its send and its rqst's release
+ * holds the next call back a little early, never late.
  */
-static bool svc_rtc_sk_full(struct svc_xprt *xprt, unsigned int max)
+static unsigned long svc_rtc_held(struct svc_rtc_conn *conn, struct sock *sk)
 {
-	struct svc_sock *svsk = container_of(xprt, struct svc_sock, sk_xprt);
+	return READ_ONCE(sk->sk_wmem_queued) +
+	       atomic_long_read(&conn->parked_bytes);
+}
+
+/*
+ * Whether @conn holds @max bytes or more.  If it does, the socket is
+ * marked SOCK_NOSPACE, so that TCP calls svc_write_space() as ACKs shrink
+ * the queue, and svc_rtc_unpark() enqueues as promises are given back.
+ */
+static bool svc_rtc_sk_full(struct svc_rtc_conn *conn, unsigned int max)
+{
+	struct svc_sock *svsk = container_of(conn->xprt, struct svc_sock,
+					     sk_xprt);
 	struct sock *sk = svsk->sk_sk;
 
-	if (READ_ONCE(sk->sk_wmem_queued) < max)
+	if (svc_rtc_held(conn, sk) < max)
 		return false;
 	set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
-	/* An ACK that shrank the queue before the mark was seen kicks no one. */
+	/* An ACK or unpark before the mark was seen kicks no one. */
 	smp_mb__after_atomic();
-	return READ_ONCE(sk->sk_wmem_queued) >= max;
+	return svc_rtc_held(conn, sk) >= max;
 }
 
 static bool svc_rtc_send_full(struct svc_rtc_conn *conn)
 {
 	unsigned int max = READ_ONCE(svc_rtc_send_max);
 
-	if (!max || !svc_rtc_sk_full(conn->xprt, max))
+	if (!max || !svc_rtc_sk_full(conn, max))
 		return false;
 	this_cpu_inc(svc_rtc_send_full_n);
 	return true;
@@ -1647,16 +1664,18 @@ static bool svc_rtc_send_full(struct svc_rtc_conn *conn)
  * queue is at or over the bound, and mark the socket again so that the
  * next ACK calls back.
  *
- * Return: %false while a connection with a work item is at or over
- * svc_rtc_send_max, else %true.
+ * Return: %false while a connection with a work item holds
+ * svc_rtc_send_max or more (svc_rtc_held()), else %true.
  */
 bool svc_rtc_has_wspace(struct svc_xprt *xprt)
 {
 	unsigned int max = READ_ONCE(svc_rtc_send_max);
+	struct svc_rtc_conn *conn;
 
-	if (likely(!max) || !READ_ONCE(xprt->xpt_rtc))
+	if (likely(!max))
 		return true;
-	if (!svc_rtc_sk_full(xprt, max))
+	conn = READ_ONCE(xprt->xpt_rtc);
+	if (!conn || !svc_rtc_sk_full(conn, max))
 		return true;
 	this_cpu_inc(svc_rtc_send_nospace_n);
 	return false;
@@ -2999,19 +3018,41 @@ static void svc_rtc_park(struct svc_rtc_rqst *r)
 		return;
 	r->parked = true;
 	atomic_inc(&r->conn->parked);
+	/* nfsd's READ has narrowed rq_reserved to its reply (svc_reserve()). */
+	r->promised = max(r->rqstp->rq_reserved, 0);
+	atomic_long_add(r->promised, &r->conn->parked_bytes);
 	n = atomic_inc_return(&pool->parked);
 	if (n > READ_ONCE(pool->hw))
 		WRITE_ONCE(pool->hw, n);
 }
 
-/* The call left its async wait: released, or handed to a thread. */
+/*
+ * The call left its async wait: released, or handed to a thread.  Its
+ * promise goes back.  While the send bound holds the connection back
+ * (SOCK_NOSPACE), enqueue the transport: a promise given back with no
+ * ACK to come (a call handed to a thread, a reply dropped) would
+ * otherwise leave nothing to call back, and svc_rtc_has_wspace() refuses
+ * the enqueue cheaply while the connection is still over the bound.
+ */
 static void svc_rtc_unpark(struct svc_rtc_rqst *r)
 {
+	struct svc_rtc_conn *conn = r->conn;
+	struct svc_sock *svsk;
+
 	if (!r->parked)
 		return;
 	r->parked = false;
-	atomic_dec(&r->conn->parked);
+	atomic_dec(&conn->parked);
 	atomic_dec(&r->rqstp->rq_server->sv_rtc_pool->parked);
+	atomic_long_sub(r->promised, &conn->parked_bytes);
+	r->promised = 0;
+	if (!READ_ONCE(svc_rtc_send_max))
+		return;
+	svsk = container_of(conn->xprt, struct svc_sock, sk_xprt);
+	/* Pairs with svc_rtc_sk_full()'s barrier after its mark. */
+	smp_mb__after_atomic();
+	if (test_bit(SOCK_NOSPACE, &svsk->sk_sock->flags))
+		svc_xprt_enqueue(conn->xprt);
 }
 
 /*
