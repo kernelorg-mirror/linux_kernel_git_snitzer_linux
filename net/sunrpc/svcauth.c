@@ -20,6 +20,7 @@
 #include <linux/hash.h>
 #include <linux/user_namespace.h>
 
+#include <kunit/visibility.h>
 #include <trace/events/sunrpc.h>
 
 #include "sunrpc.h"
@@ -49,12 +50,13 @@ static struct auth_ops __rcu *authtab[RPC_AUTH_MAXFLAVOR] = {
  * another module, such as RPC_AUTH_GSS from auth_rpcgss.  get and put both
  * test this, so a reference is always dropped exactly when it was taken.
  */
-static bool svc_auth_ops_needs_module_ref(const struct auth_ops *aops)
+VISIBLE_IF_KUNIT bool svc_auth_ops_needs_module_ref(const struct auth_ops *aops)
 {
 	return aops->owner != THIS_MODULE;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_auth_ops_needs_module_ref);
 
-static struct auth_ops *
+VISIBLE_IF_KUNIT struct auth_ops *
 svc_get_auth_ops(rpc_authflavor_t flavor)
 {
 	struct auth_ops		*aops;
@@ -69,13 +71,15 @@ svc_get_auth_ops(rpc_authflavor_t flavor)
 	rcu_read_unlock();
 	return aops;
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_get_auth_ops);
 
-static void
+VISIBLE_IF_KUNIT void
 svc_put_auth_ops(struct auth_ops *aops)
 {
 	if (svc_auth_ops_needs_module_ref(aops))
 		module_put(aops->owner);
 }
+EXPORT_SYMBOL_IF_KUNIT(svc_put_auth_ops);
 
 /**
  * svc_authenticate - Initialize an outgoing credential
