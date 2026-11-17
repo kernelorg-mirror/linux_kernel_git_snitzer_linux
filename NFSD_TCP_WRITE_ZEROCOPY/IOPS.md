@@ -143,10 +143,11 @@ client, 8 s at 999 Hz on both):
 In order, each an A/B under `settled-iops.sh` at iodepth 32, three
 runs a side, with t2-r883 to r887 the base:
 
-1. **The server's `pool_mode`, `auto` against `pernode`** (below,
-   Mike: the server A/B on this list).  Expected to matter little for
-   READs, which do not run on nfsd's threads; it settles the question
-   David's setup raises.
+1. **The server's `pool_mode`, `auto` against `pernode`: done**
+   (`FLAMEGRAPH/109-iops/README.md`, t2-r888 to r893).  percpu, what
+   auto picks, read 1.93 M IOPS median against pernode's 1.89, 2% more
+   and every percpu run above every pernode run.  Mike: pernode stays
+   settled, percpu ruled out for now.
 2. **Depth: iodepth 16 and 64** on the new client, to see whether the
    rate now follows the number in flight (latency-bound) or holds (a
    limit somewhere).

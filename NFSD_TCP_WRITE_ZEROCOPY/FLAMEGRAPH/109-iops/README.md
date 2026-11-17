@@ -43,3 +43,15 @@ settles what David Flynn's setup (auto) assumed.
   after each.  settled.sh is not changed: percpu cost WRITEs on builds
   512 and 514 (IOPS.md), so for IOPS it is an `EXP_POOL_MODE=percpu`
   run setting, and settling it would take a WRITE pass and Mike's word.
+- **Decided (Mike, 17 November): pernode stays settled, and percpu is
+  ruled out for now** ("just leave pernode settled.  Nice to have ruled
+  out percpu at this time").  The rest of round 109 runs at pernode.
+
+## 2. Depth on the new client: iodepth 16 and 64
+
+Is the rate now set by the number in flight?  nfs4k.sh under
+settled-iops.sh at pernode, two runs at each of 16 and 64 in turns,
+iodepth 32 being t2-r883 to r887 and r889, r891, r893:
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 depth ./settled-iops.sh run \
+        ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 894:16 895:64 896:16 897:64
