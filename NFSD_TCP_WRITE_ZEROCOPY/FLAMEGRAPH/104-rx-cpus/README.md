@@ -2628,3 +2628,6 @@ about 950k packets a second a queue, not the queues' bytes.  NFS's
 READs carry 9 GB/s a queue in about 170k sends.  The ceiling in bytes
 needs large skbs from the sender: iperf3 run forward from tardis2 with
 `-Z` (sendfile), not yet run.
+
+About to run (Mike: "yes, run it with -Z"): `ZC=1 iperf-tx.sh ab` as
+`t2-iperf-tx-2`: tardis2 sends forward with `-Z`, 16 streams a port.

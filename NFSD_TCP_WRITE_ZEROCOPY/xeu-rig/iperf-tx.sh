@@ -8,7 +8,8 @@
 # its server refuses -Z), so they pay a copy nfsd's page references do
 # not.  The rate is read from the port's
 # tx_bytes over the middle of the run.  iperf2port.sh is the other way.
-# Ports as twoport.sh has them.
+# ZC=1 sends forward from tardis2 with -Z instead.  Ports as twoport.sh
+# has them.
 . "$(dirname "$0")/common.sh"
 WHICH=${1:?a|b|ab}; N=${2:-16}; SECS=${3:-20}
 which_ok "$WHICH" || exit 1
@@ -34,12 +35,24 @@ echo Y > /sys/module/xeu/parameters/rx_port_stats
 audit_or_die rest $L/iperf-tx-audit.txt
 pkill -x iperf3; sleep 1
 c=""
+if [ "${ZC:-0}" = 1 ]; then
+	# ZC=1: tardis2 is the iperf3 client and sends forward with -Z
+	# (sendfile: page references, large skbs, as nfsd's replies), the
+	# client's iperf3 servers receiving.
+	for p in $PORTS; do c="$c for i in \$(seq $N); do iperf3 -s -1 -B ${CLI[$p]} -p \$(( 5200 + i )) > /dev/null 2>&1 & done;"; done
+	$SSHC "$c wait" < /dev/null &
+	sleep 3
+	for p in $PORTS; do for i in $(seq $N); do
+		taskset -c 8-55 iperf3 -c ${CLI[$p]} -B ${SRV[$p]} -p $(( 5200 + i )) -t $SECS -Z -l ${LEN:-256K} > /dev/null 2>&1 &
+	done; done
+else
 	for p in $PORTS; do for i in $(seq $N); do
 		taskset -c 8-55 iperf3 -s -1 -B ${SRV[$p]} -p $(( 5200 + i )) > /dev/null 2>&1 &
 	done; done
 	for p in $PORTS; do c="$c for i in \$(seq $N); do iperf3 -c ${SRV[$p]} -B ${CLI[$p]} -p \$(( 5200 + i )) -t $SECS -R -l ${LEN:-256K} > /dev/null 2>&1 & done;"; done
-sleep 2
-$SSHC "$c wait" < /dev/null &
+	sleep 2
+	$SSHC "$c wait" < /dev/null &
+fi
 W=$(( SECS - 8 )); sleep 5
 declare -A F0 T0 B0
 for p in $PORTS; do d=${DEV[$p]}; F0[$p]=$(fifo $d); T0[$p]=$(ringdrop $d); B0[$p]=$(rxbytes $d); txrings $d > /tmp/.iperf-tx-$p.0; done
@@ -60,6 +73,6 @@ for p in $PORTS; do
 	txdiff /tmp/.iperf-tx-$p.0 /tmp/.iperf-tx-$p.1 $W
 done
 wait
-echo "$WHICH iperf3 -R -l ${LEN:-256K}, $N streams a port: total $tot GB/s sent"
+echo "$WHICH iperf3 $([ "${ZC:-0}" = 1 ] && echo "-Z, tardis2 sending" || echo -R) -l ${LEN:-256K}, $N streams a port: total $tot GB/s sent"
 awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; c = $2 + 0; if (c < 8) a += b; else if (c >= 56) z += b; else n += b} END {printf "CPUs busy: rings of a %.0f%%, rings of b %.0f%%, senders (8-55) %.0f%%\n", a / 8, z / 8, n / 48}' /tmp/.iperf-tx-mpstat
 awk '$1 == "Average:" && $2 ~ /^[0-9]+$/ {b = 100 - $NF - $6; n++; t += b; so += $8; if (b > 90) h++; if (b > m) m = b} END {printf "client CPUs: mean %.0f%% busy (softirq %.0f%%), %d over 90%%, busiest %.0f%%; receive drops %d\n", t / n, so / n, h, m, d}' d=$(( $(cdrops) - CD0 )) /tmp/.iperf-tx-cmpstat
