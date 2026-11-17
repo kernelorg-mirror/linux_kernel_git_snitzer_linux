@@ -27,6 +27,14 @@
 #   NCONN=16                  16 a mount, 128 in all, his connection count
 #   JOBS=24                   a port: 48 jobs, one a client CPU
 #   IODEPTH=32, io_uring with registered buffers, 4 KiB random READs
+#   CLI_SCOPE=cache_shard     the client's workqueue default_affinity_scope
+#                             for the run, build 541's own default, not
+#                             twoport.sh's numa (Mike, 17 November: "add
+#                             cache_shard to settled-iops.sh"): 2.39 M IOPS
+#                             in three runs against numa's 2.31 to 2.32,
+#                             the client 68% busy against 77%, the p99
+#                             0.8 ms longer (FLAMEGRAPH round 109, t2-r909
+#                             to r914).  The WRITE and READ passes keep numa.
 #
 # What he prescribes that settled.sh already holds: max_block_size 1 MiB,
 # io_cache_read and io_cache_write 2 (direct), svc_tcp_rx_region_reads N,
@@ -60,6 +68,7 @@ apply|audit) exec ./settled.sh "$@" ;;
 run)
 	shift; [ $# -gt 0 ] || { echo "settled-iops.sh run <command ...>"; exit 1; }
 	export SRV_ALIAS=${SRV_ALIAS:-1} NCONN=${NCONN:-16} JOBS=${JOBS:-24} IODEPTH=${IODEPTH:-32}
+	export CLI_SCOPE=${CLI_SCOPE:-cache_shard}
 	export RW=${RW:-randread} BS=${BS:-4k} IOENGINE=${IOENGINE:-io_uring} FIXEDBUFS=${FIXEDBUFS-1}
 	"$@"; rc=$?
 	env -u EXP_NFSD_THREADS -u EXP_SYSCTL -u EXP_POOL_MODE ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
