@@ -2548,3 +2548,15 @@ are as before `80e7a8cafad0a`, built).  tardis2 is back on
 `sunrpc-nosplit-534` (`67376EA89E652240AB9F1E1`), settled.  The read
 files r800 wrote are still on the drives with their marker; the next
 run without `KEEP_FILES=1` writes them anew and deletes them.
+
+**The next boot is withdrawn** (Mike, 17 November: "I'm not pursuing
+that gitlab build given its unlikely to help.. the recycle was meant to
+cherry-pick unbounded connection usage"): "Next boot: the kernel from
+the tip, READ confinement again" above is not to be run.  The recycle
+was the try at confinement's gain (reply pages kept off the zone lock)
+without its share a connection; it held no share and reused 97% of the
+pages, and lost on the NIC.  Both ways of reusing reply pages have now
+lost reads (`region_reads` Y, t2-r665 and r667; the recycle, r782 to
+r810), and the zero-copy send with fresh pages did not (r809): why the
+NIC drains reused pages more slowly is the open question before any
+other way of keeping reply pages off the zone lock.

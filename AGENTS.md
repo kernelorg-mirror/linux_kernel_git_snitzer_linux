@@ -441,13 +441,15 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
-**tardis2's next boot (Mike, 16 November, late): the kernel Mike
-builds on gitlab from the tip with David Flynn's 15 READ-confinement
-patches.  Start at "Next boot: the kernel from the tip, READ
+**Withdrawn (Mike, 17 November: "I'm not pursuing that gitlab build
+given its unlikely to help"): the boot below.  tardis2 stays on build
+534 with `sunrpc-nosplit-534`.**  ~~tardis2's next boot (Mike, 16
+November, late): the kernel Mike builds on gitlab from the tip with
+David Flynn's 15 READ-confinement patches.  Start at "Next boot: the kernel from the tip, READ
 confinement again" at the end of
 `NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/README.md`: the boot's
 checks, the WRITE and READ passes, then `ab-reads.sh` (region_reads N
-and Y in turns, the region's exact peak beside the rate).  The
+and Y in turns, the region's exact peak beside the rate).~~  The
 paragraphs below are the boots before it.**
 
 **tardis2's next boot (Mike, 16 November, 20:00): build 534 with
