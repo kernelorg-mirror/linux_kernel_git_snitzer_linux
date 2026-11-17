@@ -166,3 +166,56 @@ largest self costs.
 4. Each round's README records its WRITE pass and READ pass, as the hard
    rules in AGENTS.md ask of any change to a path they take.  A
    client-only change takes no server path, but say so in the README.
+
+## Handoff (17 November, 19:20): where IOPS stand
+
+**Read this first on the next session.**  tardis2 is on the boot that
+ran round 106 (build 534 with the promise stack in `updates/`), kdump
+armed, at the settled setting (`settled.sh audit rest`: "the settled
+setting"), nothing running.  The client is still build 469
+(`7.3.0-0.rc7.2.hs.469.el9.x86_64`, up 36 days); **Mike is building the
+canary-WIP tip for it**, and that boot is the next step.  The server
+needs no change for it (the new code is all the client's).
+
+What was done on 17 November, after round 107:
+
+- Round 108 (`FLAMEGRAPH/108-4k-randread/README.md`): the drives read
+  18.78 M IOPS locally; NFS 0.98 M on the settled setting (t2-r872 to
+  r874), **1.05 M on David Flynn's setting** (`xeu-rig/settled-iops.sh`,
+  t2-r875 to r879), the client 94 to 100% busy and the server about
+  half idle.
+- t2-r880's profile: the client spends 63.5% of its cycles on the
+  workqueue pool lock of rpciod and xprtiod ("What limits the client
+  now", above).  The commits that remove it are checked present at the
+  canary-WIP tip ("The client commits that remove the contention").
+- Each drive has two more 512 MiB files, `f-<port>.4` and `.5`, for
+  `settled-iops.sh`'s 24 jobs a port; the fill marker is unchanged.
+- `settled.sh` took `EXP_NFSD_THREADS` and `EXP_SYSCTL`; unset they
+  change nothing.
+- **The x86_64 build of canary-WIP failed** in
+  `net/core/rx_loan_kunit.c` (a `__percpu` pointer, `__seg_gs` on x86,
+  given to `KUNIT_ASSERT_NOT_NULL()`).  The fix is `bf421b073b621`, at
+  this branch's tip and not on canary-WIP: the client's build needs it,
+  or `CONFIG_RX_LOAN_KUNIT_TEST=n`.  It is compiled on arm64 only; a
+  later x86-only error in the same build is possible.
+- David's instructions are committed beside this file
+  (`nfsv3-max-iops-agent-instructions-20261117.md`).
+
+When the client is up on the canary-WIP tip, in this order:
+
+1. The checks in "Next", step 1 (read only), and ping both ports.
+2. Three runs at iodepth 32 under `settled-iops.sh`, numbered from
+   t2-r881:
+
+       cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r108 iops-wip ./settled-iops.sh run \
+           ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 881:32 882:32 883:32
+
+   then `prof4k.sh 884` for what the client waits on next.
+3. The A/Bs of "Next", step 3, one at a time.  The round's README
+   records each, and the client's kernel beside every result.
+
+Not changed and still open: the claude.ai artifact (round 106's story)
+has nothing of rounds 107's WRITE A/B or 108; the client's 2.17 bytes
+of memory a byte on WRITEs (round 107) is unexplained; the EFI
+partition's FAT dirty bit (nvme8n1p1) waits for a `fsck.fat` at the
+next maintenance.

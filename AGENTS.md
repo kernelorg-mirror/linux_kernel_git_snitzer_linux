@@ -462,12 +462,16 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
-**On tardis2 now (17 November, 10:00), start at "Handoff (17
+**On tardis2 now (17 November, 19:20), start at "Handoff (17
+November, 19:20): where IOPS stand" at the end of
+`NFSD_TCP_WRITE_ZEROCOPY/IOPS.md`:** 4 KiB READs at 1.05 M IOPS on
+David Flynn's setting, the client the limit on its workqueue lock, and
+the client's boot into the canary-WIP tip (Mike is building it) the
+next step.  The READ rate work's handoff before it is "Handoff (17
 November, 10:00): where round 106 stands" at the end of
-`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/106-pending-base/README.md`:** the
-promised count is settled at 1.5 MiB (READ pass 79.24 GB/s), the host
-is still on the boot that ran it, and the limit has moved to the
-client; the next round is Mike's to choose.
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/106-pending-base/README.md`: the
+promised count settled at 1.5 MiB (READ pass 79.24 GB/s, 80.39 on
+io_uring with registered buffers).
 
 **4 KiB random-READ IOPS and the client's scaling have their own
 project document since 17 November (Mike):
