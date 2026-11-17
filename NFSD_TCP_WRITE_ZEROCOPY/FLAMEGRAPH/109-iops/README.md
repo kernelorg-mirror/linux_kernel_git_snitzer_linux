@@ -92,3 +92,33 @@ turns, with 16 again beside them (t2-r896 and r898 are its first two):
 
     cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 nconn ./settled-iops.sh run \
         ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 899:64:12 900:64:18 901:64:16 902:64:12 903:64:18 904:64:16
+
+| nconnect (connections) | runs | M IOPS | completion mean / p99 | server busy (busiest) | client busy |
+|---|---|---|---|---|---|
+| **12 (96)** | t2-r899, r902 | **2.31, 2.31** | 1.32 to 1.33 / 3.92 to 4.23 ms | 69 to 71% (100%) | 77% |
+| 16 (128) | t2-r896, r898, r901, r904 | 2.19 to 2.21 | 1.38 to 1.41 / 4.08 to 4.15 ms | 67 to 68% (98 to 99%) | 75 to 76% |
+| 18 (144) | t2-r900, r903 | 2.22, 2.21 | 1.38 / 4.11 to 4.15 ms | 68% (96%) | 75 to 76% |
+
+- **nconnect 12 reads 5% more (2.31 against 2.20)**, two connections on
+  each work CPU; 18 is no better than 16.  The busiest server CPU is
+  still full at 12 (100%).  New kernel warnings 0 in all six.
+- nfs-server restarted once in this A/B (21:06:17, into percpu) and
+  once after it: a sequence under one settled-iops.sh run switches
+  pool_mode on the way in and out only.
+
+## nfsdcld spun all day, with NFSv3 alone in use
+
+`nfsdcld` (the NFSv4 client tracking daemon, started by nfs-server
+because nfsd had v4 on: `/proc/fs/nfsd/versions` "+3 +4 +4.1 +4.2")
+had 10 h 49 min of CPU in 12 h 29 min, looping on
+"cld_pipe_read_msg: pipe read failed: Broken pipe": 2.33 M journal
+lines from 19:51 (the journal's oldest) to 21:06:17, about 480 a
+second, which is also `systemd-journald`'s 1.6% in t2-r886.  It stopped
+at the nfs-server restart of 21:06:17.  Every run from t2-r883 to r898,
+both profiles included, had it; t2-r899 on did not.  Its cost to IOPS
+did not show (nconnect 16: 2.19 and 2.21 with it, 2.20 and 2.21
+without), but it took a CPU nfsd's work could have had, on any of the
+64 (its affinity 0-63).  No IOPS run used NFSv4: every mount is
+`vers=3` (t2-r903's eight, read on the client), and nfsd had no v4
+client.  Mike, 17 November: "turn off NFSv4 and make it so that
+nfsdcld never ever runs!"
