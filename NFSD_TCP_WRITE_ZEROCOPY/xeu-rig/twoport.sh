@@ -295,10 +295,13 @@ SAVE[cscope]=$(cl "cat $WQS"); SAVE[cirqb]=$(cl "systemctl is-active irqbalance"
 cl "echo $CLI_SCOPE > $WQS" && [ "$(cl "cat $WQS")" = $CLI_SCOPE ] || { echo "the client's workqueue scope not set to $CLI_SCOPE"; exit 1; }
 # rpciod and xprtiod held to the node of the CPU that queues their work
 # (affinity_strict): none of the client's sends leaves from the far node.
-cl "for w in rpciod xprtiod; do d=/sys/devices/virtual/workqueue/\$w; [ -e \$d/affinity_strict ] || exit 1; echo $CLI_STRICT > \$d/affinity_strict; [ \$(cat \$d/affinity_strict) = $CLI_STRICT ] || exit 1; done" ||
+# A per-CPU workqueue (per_cpu 1: rpciod on the canary-WIP tip, David
+# Flynn's ccaaf769083fe) runs each item on the CPU that queued it, which
+# is stricter still, and has no affinity_strict: it is left as it is.
+cl "for w in rpciod xprtiod; do d=/sys/devices/virtual/workqueue/\$w; [ \"\$(cat \$d/per_cpu 2>/dev/null)\" = 1 ] && continue; [ -e \$d/affinity_strict ] || exit 1; echo $CLI_STRICT > \$d/affinity_strict; [ \$(cat \$d/affinity_strict) = $CLI_STRICT ] || exit 1; done" ||
 	{ [ $CLI_STRICT = 0 ] || { echo "the client's rpciod and xprtiod not made strict: is its sunrpc.ko the one in updates/ (WQ_SYSFS)? CLI_STRICT=0 runs without"; exit 1; }; }
 [ $CLI_IRQB = stop ] && [ "${SAVE[cirqb]}" = active ] && { cl "systemctl stop irqbalance" || { echo "the client's irqbalance not stopped"; exit 1; }; }
-echo "client: writers pinned $PIN, workqueue scope $(cl "cat $WQS") (was ${SAVE[cscope]}), rpciod and xprtiod strict $(cl "cat /sys/devices/virtual/workqueue/{rpciod,xprtiod}/affinity_strict 2>/dev/null | paste -sd/" || echo -) (sunrpc $(cl "cat /sys/module/sunrpc/srcversion")), irqbalance $(cl "systemctl is-active irqbalance") (was ${SAVE[cirqb]})" | tee -a geometry.txt
+echo "client: writers pinned $PIN, workqueue scope $(cl "cat $WQS") (was ${SAVE[cscope]}), rpciod and xprtiod strict $(cl "for w in rpciod xprtiod; do d=/sys/devices/virtual/workqueue/\$w; [ \"\$(cat \$d/per_cpu 2>/dev/null)\" = 1 ] && echo per-cpu || cat \$d/affinity_strict 2>/dev/null || echo -; done | paste -sd/") (sunrpc $(cl "cat /sys/module/sunrpc/srcversion")), irqbalance $(cl "systemctl is-active irqbalance") (was ${SAVE[cirqb]})" | tee -a geometry.txt
 echo "this run: rcvbuf $(cat $SP/svc_tcp_rx_rcvbuf) linger $(cat $SP/svc_tcp_rx_linger_us 2>/dev/null || echo -) copy_threads $(cat $SP/svc_tcp_rx_copy_threads 2>/dev/null || echo -) lowat $(cat $SP/svc_tcp_rx_lowat 2>/dev/null || echo -) keep $(cat $SP/svc_tcp_rx_keep 2>/dev/null || echo -) want_eighths $(cat $SP/svc_tcp_rx_want_eighths 2>/dev/null || echo -) spare $(cat $SP/svc_tcp_spare_bytes_max 2>/dev/null || echo -) rings ${RINGS:-4} entries ${ENTRIES:-256} qdisc ${QDISC:-codel} nconn $NCONN jobs $JOBS bs $BS rw $RW${RWMIX:+ rwmixread $RWMIX} iodepth $IODEPTH size $SIZE rsize $RSIZE wsize $WSIZE max_block_size $(cat /proc/fs/nfsd/max_block_size) io_cache_read $(cat /sys/kernel/debug/nfsd/io_cache_read) client pin $PIN ioengine ${IOENGINE:-libaio}${FIXEDBUFS:+ fixedbufs $FIXEDBUFS}" | tee -a geometry.txt
 
 for p in $PORTS; do
