@@ -1282,6 +1282,7 @@ static bool nfsd3_rtc_want_call(struct svc_xprt *xprt, u32 prog, u32 vers,
 static int nfsd3_rtc_rqst_init(struct svc_rqst *rqstp)
 {
 	struct nfsd_rtc_ctx *c = kzalloc(sizeof(*c), GFP_KERNEL);
+	struct nfsd_thread_local_info *ntli;
 
 	rqstp->rq_private = kzalloc(sizeof(struct nfsd_thread_local_info),
 				    GFP_KERNEL);
@@ -1293,6 +1294,9 @@ static int nfsd3_rtc_rqst_init(struct svc_rqst *rqstp)
 	}
 	c->rqstp = rqstp;
 	rqstp->rq_rtc_priv = c;
+	ntli = rqstp->rq_private;
+	nfsd_exp_slot_init(&ntli->ntli_exp_slot);
+	nfsd_exp_slot_register(&ntli->ntli_exp_slot);
 	return 0;
 }
 
@@ -1304,6 +1308,7 @@ static void nfsd3_rtc_rqst_free(struct svc_rqst *rqstp)
 	rqstp->rq_rtc_priv = NULL;
 	if (!ntli)
 		return;
+	nfsd_exp_slot_exit(&ntli->ntli_exp_slot);
 	put_cred(ntli->ntli_user_cred);
 	put_cred(ntli->ntli_fh_base);
 	put_cred(ntli->ntli_fh_cred);

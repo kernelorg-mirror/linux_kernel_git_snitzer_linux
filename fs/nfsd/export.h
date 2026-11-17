@@ -139,6 +139,7 @@ struct svc_export *nfsd_exp_borrow(struct svc_rqst *rqstp, struct net *net,
 				   struct nfsd_exp_slot **slotp);
 void			nfsd_exp_slot_return(struct nfsd_exp_slot *slot);
 void			nfsd_exp_slot_init(struct nfsd_exp_slot *slot);
+void			nfsd_exp_slot_register(struct nfsd_exp_slot *slot);
 void			nfsd_exp_slot_exit(struct nfsd_exp_slot *slot);
 void			nfsd_exp_slots_drain(void);
 

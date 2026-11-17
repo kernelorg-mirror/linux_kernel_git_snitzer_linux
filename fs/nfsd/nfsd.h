@@ -73,7 +73,7 @@ struct nfsd_exp_slot {
 	spinlock_t		lock;		/* guards borrowed, dead */
 	bool			borrowed;	/* an export is lent out */
 	bool			dead;		/* drained while borrowed */
-	bool			enabled;	/* an nfsd() thread's slot */
+	bool			enabled;	/* a thread's or rtc rqst's slot */
 	bool			registered;	/* on the drain list (owner) */
 	u8			fsid_type;
 	u32			fsid[6];
@@ -93,7 +93,6 @@ struct nfsd_thread_local_info {
 	/* the decode's raised copy of ntli_fh_base (nfsd_set_fh_dentry()) */
 	const struct cred	*ntli_fh_base;
 	const struct cred	*ntli_fh_cred;
-	/* nfsd() threads only: rtc pool contexts never borrow */
 	struct nfsd_exp_slot	ntli_exp_slot;
 };
 
