@@ -210,3 +210,17 @@ nconnect 12, under one settled-iops.sh run:
 
     cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 scope ./settled-iops.sh run \
         ../FLAMEGRAPH/109-iops/ab-scope.sh 909:cache_shard 910:numa 911:cache_shard 912:numa 913:cache_shard 914:numa
+
+| Client scope | Runs | M IOPS | ms mean / p99 | Client busy (busiest) | Server busy (busiest) |
+|---|---|---|---|---|---|
+| cache_shard | t2-r909, r911, r913 | **2.39, 2.39, 2.39** | 1.27 to 1.30 / 4.69 to 4.88 | 68% (74 to 78%) | 72 to 73% (95 to 96%) |
+| numa | t2-r910, r912, r914 | 2.32, 2.31, 2.32 | 1.32 to 1.33 / 3.92 to 4.01 | 77 to 78% (82 to 84%) | 69 to 70% (90 to 92%) |
+
+Every run's geometry line confirms its scope.  cache_shard carries 3%
+more for 9 points less client CPU, each side within 0.01 M of itself;
+its p99 is about 0.8 ms longer in all three runs, likely xprtiod's
+receive work queued on fewer CPUs a pool.  The server's busiest work
+CPU moves to 95 to 96%: it is now the nearer limit.  No new kernel
+warnings.  **settled-iops.sh holds `CLI_SCOPE=cache_shard` since then
+(Mike, 17 November: "add cache_shard to settled-iops.sh")**; the WRITE
+and READ passes keep twoport.sh's numa.

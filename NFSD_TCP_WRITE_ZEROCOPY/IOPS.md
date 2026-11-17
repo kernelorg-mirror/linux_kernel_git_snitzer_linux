@@ -157,6 +157,9 @@ runs a side, with t2-r883 to r887 the base:
    three) against 16.
 4. **The client's xprtiod**: `CLI_SCOPE=cache_shard` (build 541's
    default) against numa, then xprtiod per-CPU if the lock stays.
+   **Done (t2-r909 to r914): cache_shard 2.39 M IOPS three times
+   against numa's 2.31 to 2.32, the client 68% busy against 77%, p99
+   0.8 ms longer; `settled-iops.sh` holds cache_shard since (Mike).**
 5. **Port David's 18 and 19** (an nfsd thread borrows the export, no
    shared reference a request) if the server becomes the limit: 10% of
    the server's samples are the checks it shortens.
