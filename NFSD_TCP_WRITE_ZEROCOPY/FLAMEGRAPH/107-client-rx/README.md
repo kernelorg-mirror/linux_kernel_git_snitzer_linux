@@ -139,3 +139,10 @@ submission 8.68%, no io_uring workers, new kernel warnings 0.  Within
 0.03 GB/s of t2-r864: the gain repeats.  The passes stay on libaio
 until Mike decides.  Round 106 and 107's story is on the claude.ai page
 "NFSD Read Promised Count" (https://claude.ai/artifact/B7V1qW3uD5qGwX9DAhGDkz).
+
+**The READ pass with io_uring and registered buffers** (Mike: "run the
+READ pass with io_uring fixedbufs").  About to run: `IOENGINE=io_uring
+FIXEDBUFS=1 ./read-check.sh 867` through `step.sh
+/var/tmp/zc-run-logs/r107 rcuring`, at the settled setting, the pass's
+own shape (`WARM=10 RUNTIME=40`, a trim and 120 s of rest), set beside
+t2-r859's 79.24 on libaio.
