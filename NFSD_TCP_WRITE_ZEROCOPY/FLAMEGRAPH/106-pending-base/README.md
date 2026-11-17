@@ -358,3 +358,10 @@ Send-Q 0.33 MB a socket, held 13 MB, waiting for the NIC 7 MB, cycles a
 KiB 461 / 157 / 619, held back 4889515, new kernel warnings 0.  Within
 0.2% of t2-r854, at the same memory a byte.  The story of the row and
 what each field means is a claude.ai page, "NFSD Read Promised Count".
+
+**The passes at 1.5 MiB** (Mike: "run the write and read passes at 1.5
+MiB").  About to run, on the pending base with the bound at 1.5 MiB:
+`EXP_RTC_SEND_MAX=1572864 ./pending-settled.sh run ./write-check.sh 858`,
+then the same with `./read-check.sh 859`, each through `step.sh
+/var/tmp/zc-run-logs/r106-promise`.  The read check is the first to read
+a write check's kept files.
