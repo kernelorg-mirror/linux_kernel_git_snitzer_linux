@@ -14,6 +14,7 @@ struct knfsd_fh;
 struct nfsd_net;
 struct svc_fh;
 struct svc_rqst;
+struct nfsd_exp_slot;
 
 /*
  * FS Locations
@@ -131,6 +132,26 @@ __be32 check_nfsd_access(struct svc_export *exp, struct svc_rqst *rqstp);
 int			nfsd_export_init(struct net *);
 void			nfsd_export_shutdown(struct net *);
 void			nfsd_export_flush(struct net *);
+struct svc_export *nfsd_exp_borrow(struct svc_rqst *rqstp, struct net *net,
+				   struct auth_domain *client,
+				   struct auth_domain *gssclient,
+				   int fsid_type, u32 *fsidv,
+				   struct nfsd_exp_slot **slotp);
+void			nfsd_exp_slot_return(struct nfsd_exp_slot *slot);
+void			nfsd_exp_slot_init(struct nfsd_exp_slot *slot);
+void			nfsd_exp_slot_exit(struct nfsd_exp_slot *slot);
+void			nfsd_exp_slots_drain(void);
+
+/* Per-CPU sums of the export borrow counters (debugfs export_borrow). */
+struct nfsd_exp_borrow_counts {
+	unsigned long	hit;		/* lent the slot's export */
+	unsigned long	fill;		/* missed, refilled the slot */
+	unsigned long	skip;		/* ineligible or already borrowed */
+	unsigned long	drain;		/* slot drains */
+	unsigned long	bad_return;	/* return without a borrow (WARN) */
+};
+
+void			nfsd_exp_borrow_read_counts(struct nfsd_exp_borrow_counts *c);
 struct svc_export *	rqst_exp_get_by_name(struct svc_rqst *,
 					     const struct path *);
 struct svc_export *	rqst_exp_parent(struct svc_rqst *,
@@ -150,6 +171,20 @@ static inline struct svc_export *exp_get(struct svc_export *exp)
 	cache_get(&exp->h);
 	return exp;
 }
+
+/*
+ * Drop the export nfsd_set_fh_dentry() put in an svc_fh: return the
+ * borrow when @slot is set, else put the reference.
+ */
+static inline void nfsd_exp_release(struct svc_export *exp,
+				    struct nfsd_exp_slot *slot)
+{
+	if (slot)
+		nfsd_exp_slot_return(slot);
+	else
+		exp_put(exp);
+}
+
 struct svc_export *rqst_exp_find(struct cache_req *reqp, struct net *net,
 				 struct auth_domain *cl, struct auth_domain *gsscl,
 				 int fsid_type, u32 *fsidv);

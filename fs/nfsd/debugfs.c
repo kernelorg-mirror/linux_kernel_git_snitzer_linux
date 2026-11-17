@@ -5,6 +5,7 @@
 #include <linux/sunrpc/svc_xprt.h>
 
 #include "nfsd.h"
+#include "export.h"
 
 static struct dentry *nfsd_top_dir __read_mostly;
 
@@ -133,12 +134,34 @@ static int nfsd_rtc_stats_show(struct seq_file *m, void *v)
 }
 DEFINE_SHOW_ATTRIBUTE(nfsd_rtc_stats);
 
+/*
+ * /sys/kernel/debug/nfsd/export_borrow
+ *
+ * Per-thread export borrow counters, summed over CPUs: NFSv3 file handles
+ * served from the thread's cached export (hit), slot refills (fill),
+ * requests that took the plain lookup (skip), slot drains, and returns
+ * without a borrow.  Read-only.
+ */
+static int nfsd_export_borrow_show(struct seq_file *m, void *v)
+{
+	struct nfsd_exp_borrow_counts c;
+
+	nfsd_exp_borrow_read_counts(&c);
+	seq_printf(m, "hit %lu fill %lu skip %lu drain %lu bad_return %lu\n",
+		   c.hit, c.fill, c.skip, c.drain, c.bad_return);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(nfsd_export_borrow);
+
 void nfsd_debugfs_init(void)
 {
 	nfsd_top_dir = debugfs_create_dir("nfsd", NULL);
 
 	debugfs_create_file("rtc_stats", 0444, nfsd_top_dir, NULL,
 			    &nfsd_rtc_stats_fops);
+
+	debugfs_create_file("export_borrow", 0444, nfsd_top_dir, NULL,
+			    &nfsd_export_borrow_fops);
 
 	debugfs_create_file("disable-splice-read", S_IWUSR | S_IRUGO,
 			    nfsd_top_dir, NULL, &nfsd_dsr_fops);

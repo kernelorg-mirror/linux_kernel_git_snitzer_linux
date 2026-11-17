@@ -1004,6 +1004,7 @@ nfsd(void *vrqstp)
 	/* use dynamic allocation if ntli should ever become large */
 	static_assert(sizeof(struct nfsd_thread_local_info) < 256);
 	rqstp->rq_private = &ntli;
+	nfsd_exp_slot_init(&ntli.ntli_exp_slot);
 
 	/*
 	 * The main request loop
@@ -1052,6 +1053,7 @@ nfsd(void *vrqstp)
 
 	atomic_dec(&nfsd_th_cnt);
 
+	nfsd_exp_slot_exit(&ntli.ntli_exp_slot);
 	put_cred(ntli.ntli_user_cred);
 	put_cred(ntli.ntli_fh_base);
 	put_cred(ntli.ntli_fh_cred);

@@ -240,6 +240,7 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 	struct knfsd_fh	*fh = &fhp->fh_handle;
 	struct fid *fid = NULL;
 	struct svc_export *exp;
+	struct nfsd_exp_slot *slot = NULL;
 	struct dentry *dentry;
 	int fileid_type;
 	int data_left = fh->fh_size/4;
@@ -279,9 +280,17 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 	data_left -= len;
 	if (data_left < 0)
 		return error;
-	exp = rqst_exp_find(rqstp ? &rqstp->rq_chandle : NULL,
-			    net, client, gssclient,
-			    fh->fh_fsid_type, fh_fsid(fh));
+	/*
+	 * A borrowed export (slot set) is this thread's: it is returned by
+	 * fh_put() or at out:, never put.  NULL: not eligible, look it up.
+	 * An error from the borrow's refill is that lookup's error.
+	 */
+	exp = nfsd_exp_borrow(rqstp, net, client, gssclient,
+			      fh->fh_fsid_type, fh_fsid(fh), &slot);
+	if (!exp)
+		exp = rqst_exp_find(rqstp ? &rqstp->rq_chandle : NULL,
+				    net, client, gssclient,
+				    fh->fh_fsid_type, fh_fsid(fh));
 	fid = (struct fid *)(fh_fsid(fh) + len);
 
 	error = nfserr_stale;
@@ -392,10 +401,11 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 
 	fhp->fh_dentry = dentry;
 	fhp->fh_export = exp;
+	fhp->fh_exp_slot = slot;
 
 	return 0;
 out:
-	exp_put(exp);
+	nfsd_exp_release(exp, slot);
 	return error;
 }
 
@@ -735,6 +745,7 @@ fh_compose(struct svc_fh *fhp, struct svc_export *exp, struct dentry *dentry,
 
 	fhp->fh_dentry = dget(dentry); /* our internal copy */
 	fhp->fh_export = exp_get(exp);
+	fhp->fh_exp_slot = NULL;
 
 	fhp->fh_handle.fh_size =
 		key_len(fhp->fh_handle.fh_fsid_type) + 4;
@@ -907,7 +918,8 @@ fh_put(struct svc_fh *fhp)
 	}
 	fh_drop_write(fhp);
 	if (exp) {
-		exp_put(exp);
+		nfsd_exp_release(exp, fhp->fh_exp_slot);
+		fhp->fh_exp_slot = NULL;
 		fhp->fh_export = NULL;
 	}
 	fhp->fh_no_wcc = false;

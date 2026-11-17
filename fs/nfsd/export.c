@@ -249,6 +249,12 @@ static struct cache_head *expkey_alloc(void)
 static void expkey_flush(void)
 {
 	nfsd_file_cache_purge(current->nsproxy->net_ns);
+	nfsd_exp_slots_drain();
+}
+
+static void svc_export_flush(void)
+{
+	nfsd_exp_slots_drain();
 }
 
 static int expkey_notify(struct cache_detail *cd, struct cache_head *h)
@@ -1788,6 +1794,7 @@ static const struct cache_detail svc_export_cache_template = {
 	.init		= svc_export_init,
 	.update		= export_update,
 	.alloc		= svc_export_alloc,
+	.flush		= svc_export_flush,
 };
 
 static int
@@ -2176,6 +2183,336 @@ gss:
 	return gssexp;
 }
 
+/*
+ * Per-thread export borrow.
+ *
+ * Every NFSv3 request otherwise looks up the one svc_expkey and the one
+ * svc_export that serve it (exp_find_key() and exp_get_by_name()) and
+ * drops the export reference again at fh_put(), so on a server with one
+ * export every nfsd thread walks two hash chains and writes the same two
+ * refcounts.  Instead each nfsd thread keeps one (expkey, export) pair in
+ * its nfsd_thread_local_info slot, with its own reference on each, and a
+ * request whose (net, auth_domain, fsid type, fsid) match and whose two
+ * entries are still fresh borrows the export: no lookup and no refcount
+ * write.  fh_put() returns the borrow.
+ *
+ * Slot protocol.  slot->lock guards ->borrowed and ->dead; nothing sleeps
+ * or puts an entry under it.
+ *  - Claim (owner): lock; if ->borrowed, unlock and use rqst_exp_find()
+ *    (a nested fh_verify()); else set ->borrowed and unlock.
+ *  - While ->borrowed is set only the owner reads or writes the key and
+ *    the pair, so the key match, freshness check, dropping the old pair
+ *    and parking a new one take no lock.  An empty slot never matches.
+ *  - Return, nfsd_exp_slot_return(), the only one: lock; if ->borrowed is
+ *    clear, unlock and warn; else clear it and, if ->dead is set, clear
+ *    that and move the pair and key out; unlock; put what moved out.
+ *  - Drain, under nfsd_exp_slots_mutex for the whole walk: per slot, lock;
+ *    if ->borrowed, set ->dead; else move the pair and key out; unlock;
+ *    put what moved out.  A drain never touches a borrowed slot's pair.
+ *  - Thread exit unlinks the slot under nfsd_exp_slots_mutex, then puts
+ *    the pair.
+ * Lock order: nn->nfsd_mutex, nfsd_exp_slots_mutex, slot->lock.
+ *
+ * Freshness, checked on every borrow for both entries: CACHE_VALID set,
+ * CACHE_NEGATIVE and CACHE_CLEANED clear (CACHE_CLEANED is set on every
+ * removal from the hash), not cache_is_expired(), and not past half the
+ * refresh age, where cache_check() would start a refresh upcall.  A miss
+ * refills the slot with the request's own cache_req, which is exactly
+ * rqst_exp_find()'s lookup: it upcalls and defers as that does.
+ *
+ * Drains: the export and expkey caches' ->flush callbacks, which every
+ * write to a flush file (exportfs -r/-u/-f) runs, nfsd_export_flush() and
+ * the netlink cache flush.  So idle threads never pin an unexported
+ * export, its path or its mount.
+ */
+static LIST_HEAD(nfsd_exp_slots);
+static DEFINE_MUTEX(nfsd_exp_slots_mutex);
+static DEFINE_PER_CPU(struct nfsd_exp_borrow_counts, nfsd_exp_borrow_pcpu);
+
+/**
+ * nfsd_exp_borrow_read_counts - sum the per-CPU export borrow counters
+ * @c: filled with the sums
+ */
+void nfsd_exp_borrow_read_counts(struct nfsd_exp_borrow_counts *c)
+{
+	int cpu;
+
+	memset(c, 0, sizeof(*c));
+	for_each_possible_cpu(cpu) {
+		const struct nfsd_exp_borrow_counts *p =
+			per_cpu_ptr(&nfsd_exp_borrow_pcpu, cpu);
+
+		c->hit += READ_ONCE(p->hit);
+		c->fill += READ_ONCE(p->fill);
+		c->skip += READ_ONCE(p->skip);
+		c->drain += READ_ONCE(p->drain);
+		c->bad_return += READ_ONCE(p->bad_return);
+	}
+}
+
+/* One read of each field, so the decision is internally consistent. */
+static bool nfsd_exp_entry_fresh(const struct cache_detail *cd,
+				 const struct cache_head *h, time64_t now)
+{
+	unsigned long flags = READ_ONCE(h->flags);
+	time64_t expiry = READ_ONCE(h->expiry_time);
+	time64_t refreshed = READ_ONCE(h->last_refresh);
+
+	if (!(flags & BIT(CACHE_VALID)) ||
+	    (flags & (BIT(CACHE_NEGATIVE) | BIT(CACHE_CLEANED))))
+		return false;
+	/*
+	 * cache_is_expired(), one second stricter: an entry that
+	 * sunrpc_cache_update() replaced has expiry_time 0, which must miss
+	 * even within the first second after boot.
+	 */
+	if (expiry <= now || READ_ONCE(cd->flush_time) >= refreshed)
+		return false;
+	/*
+	 * cache_check() starts a refresh upcall past half the refresh age;
+	 * once one is pending it returns the entry as it stands until the
+	 * entry expires, so a borrow may too, rather than miss on every
+	 * call until mountd answers.
+	 */
+	return now - refreshed <= (expiry - refreshed) / 2 ||
+	       (flags & BIT(CACHE_PENDING));
+}
+
+struct nfsd_exp_pair {
+	struct svc_expkey	*ek;
+	struct svc_export	*exp;
+	struct cache_detail	*ekcd;
+};
+
+/*
+ * Empty the slot into @pair: under slot->lock with ->borrowed clear, or
+ * by the owner with ->borrowed set, or after thread exit unlinked it.
+ */
+static void nfsd_exp_slot_take(struct nfsd_exp_slot *s,
+			       struct nfsd_exp_pair *pair)
+{
+	s->client = NULL;
+	s->net = NULL;
+	pair->ek = s->ek;
+	pair->exp = s->exp;
+	pair->ekcd = s->ekcd;
+	s->ek = NULL;
+	s->exp = NULL;
+	s->ekcd = NULL;
+}
+
+/* Put what nfsd_exp_slot_take() moved out.  May sleep. */
+static void nfsd_exp_pair_put(struct nfsd_exp_pair *pair)
+{
+	if (pair->exp)
+		exp_put(pair->exp);
+	if (pair->ek)
+		cache_put(&pair->ek->h, pair->ekcd);
+}
+
+/**
+ * nfsd_exp_slot_init - make an nfsd thread's slot able to borrow
+ * @s: the slot, zeroed, in the thread's nfsd_thread_local_info
+ */
+void nfsd_exp_slot_init(struct nfsd_exp_slot *s)
+{
+	spin_lock_init(&s->lock);
+	INIT_LIST_HEAD(&s->link);
+	s->enabled = true;
+}
+
+/**
+ * nfsd_exp_borrow - lend this nfsd thread's cached export to a file handle
+ * @rqstp: the request
+ * @net: network namespace of the request
+ * @client: the request's auth_domain (rqstp->rq_client)
+ * @gssclient: the request's gss auth_domain; a borrow needs NULL
+ * @fsid_type: file handle fsid type
+ * @fsidv: file handle fsid
+ * @slotp: set to the slot when an export is returned; NULL otherwise
+ *
+ * Only an NFSv3 request on an nfsd thread whose rq_client svcauth_unix set
+ * (AUTH_SYS or AUTH_NULL, no gss client) is eligible.  On a key match with
+ * fresh entries the slot's export is lent without a lookup or a reference;
+ * otherwise the slot is refilled with rqst_exp_find()'s own lookup, using
+ * @rqstp's cache_req.  Either way the export stays the slot's: return it
+ * with nfsd_exp_slot_return(@*slotp), never exp_put().
+ *
+ * Return: the export; NULL for an ineligible request or a slot already
+ * lent out, in which case the caller uses rqst_exp_find(); or the
+ * refill's error pointer, which the caller reports as it would
+ * rqst_exp_find()'s, without looking up again.
+ */
+struct svc_export *nfsd_exp_borrow(struct svc_rqst *rqstp, struct net *net,
+				   struct auth_domain *client,
+				   struct auth_domain *gssclient,
+				   int fsid_type, u32 *fsidv,
+				   struct nfsd_exp_slot **slotp)
+{
+	struct nfsd_thread_local_info *ntli;
+	struct nfsd_exp_pair old;
+	struct nfsd_exp_slot *s;
+	struct svc_expkey *ek;
+	struct svc_export *exp;
+	struct nfsd_net *nn;
+	int klen = key_len(fsid_type);
+	time64_t now;
+
+	*slotp = NULL;
+	/* not NFSv3: not counted, so skip measures NFSv3 engagement */
+	if (!rqstp || rqstp->rq_prog != NFS_PROGRAM || rqstp->rq_vers != 3)
+		return NULL;
+	ntli = rqstp->rq_private;
+	if (!client || gssclient || !ntli || !ntli->ntli_exp_slot.enabled ||
+	    client != rqstp->rq_client || rqstp->rq_gssclient ||
+	    (rqstp->rq_cred.cr_flavor != RPC_AUTH_UNIX &&
+	     rqstp->rq_cred.cr_flavor != RPC_AUTH_NULL) ||
+	    klen <= 0 || klen > sizeof(ntli->ntli_exp_slot.fsid))
+		goto skip;
+	s = &ntli->ntli_exp_slot;
+	if (unlikely(!s->registered)) {
+		mutex_lock(&nfsd_exp_slots_mutex);
+		list_add(&s->link, &nfsd_exp_slots);
+		mutex_unlock(&nfsd_exp_slots_mutex);
+		s->registered = true;
+	}
+
+	spin_lock(&s->lock);
+	if (s->borrowed) {
+		/* a nested fh_verify() on this thread */
+		spin_unlock(&s->lock);
+		goto skip;
+	}
+	s->borrowed = true;
+	spin_unlock(&s->lock);
+
+	now = seconds_since_boot();
+	if (s->exp && s->net == net && s->client == client &&
+	    s->fsid_type == fsid_type && !memcmp(s->fsid, fsidv, klen) &&
+	    nfsd_exp_entry_fresh(s->ekcd, &s->ek->h, now) &&
+	    nfsd_exp_entry_fresh(s->exp->cd, &s->exp->h, now)) {
+		this_cpu_inc(nfsd_exp_borrow_pcpu.hit);
+		*slotp = s;
+		return s->exp;
+	}
+
+	/*
+	 * Miss: drop the old pair first, so a key change or a refill error
+	 * leaves nothing pinned, then do rqst_exp_find()'s lookup with the
+	 * request's cache_req.  It upcalls and defers exactly as that does.
+	 */
+	nfsd_exp_slot_take(s, &old);
+	nfsd_exp_pair_put(&old);
+
+	nn = net_generic(net, nfsd_net_id);
+	ek = exp_find_key(nn->svc_expkey_cache, client, fsid_type, fsidv,
+			  &rqstp->rq_chandle);
+	if (IS_ERR(ek)) {
+		exp = ERR_CAST(ek);
+		goto out_return;
+	}
+	exp = exp_get_by_name(nn->svc_export_cache, client, &ek->ek_path,
+			      &rqstp->rq_chandle);
+	if (IS_ERR(exp)) {
+		cache_put(&ek->h, nn->svc_expkey_cache);
+		goto out_return;
+	}
+	s->fsid_type = fsid_type;
+	memcpy(s->fsid, fsidv, klen);
+	s->ekcd = nn->svc_expkey_cache;
+	s->ek = ek;
+	s->exp = exp;
+	s->net = net;
+	s->client = client;
+	this_cpu_inc(nfsd_exp_borrow_pcpu.fill);
+	*slotp = s;
+	return exp;
+
+out_return:
+	nfsd_exp_slot_return(s);
+	return exp;
+skip:
+	this_cpu_inc(nfsd_exp_borrow_pcpu.skip);
+	return NULL;
+}
+
+/**
+ * nfsd_exp_slot_return - return a borrow taken by nfsd_exp_borrow()
+ * @s: the slot
+ *
+ * The only way a borrow ends: from fh_put(), from nfsd_set_fh_dentry()'s
+ * error exit, and from nfsd_exp_borrow()'s refill error.  If a drain ran
+ * while the export was lent, the slot's references are dropped here.
+ */
+void nfsd_exp_slot_return(struct nfsd_exp_slot *s)
+{
+	struct nfsd_exp_pair pair = { };
+
+	spin_lock(&s->lock);
+	if (!s->borrowed) {
+		spin_unlock(&s->lock);
+		this_cpu_inc(nfsd_exp_borrow_pcpu.bad_return);
+		WARN_ON_ONCE(1);
+		return;
+	}
+	s->borrowed = false;
+	if (s->dead) {
+		s->dead = false;
+		nfsd_exp_slot_take(s, &pair);
+	}
+	spin_unlock(&s->lock);
+	nfsd_exp_pair_put(&pair);
+}
+
+/**
+ * nfsd_exp_slot_exit - drop an nfsd thread's slot as the thread exits
+ * @s: the slot; no request is in flight on an exiting thread
+ *
+ * The thread's nfsd() exits before nfsd_export_shutdown() purges its
+ * net's caches, so no slot outlives them.
+ */
+void nfsd_exp_slot_exit(struct nfsd_exp_slot *s)
+{
+	struct nfsd_exp_pair pair;
+
+	if (!s->registered)
+		return;
+	mutex_lock(&nfsd_exp_slots_mutex);
+	list_del_init(&s->link);
+	mutex_unlock(&nfsd_exp_slots_mutex);
+	s->registered = false;
+	WARN_ON_ONCE(s->borrowed);
+	nfsd_exp_slot_take(s, &pair);
+	nfsd_exp_pair_put(&pair);
+}
+
+/**
+ * nfsd_exp_slots_drain - drop every nfsd thread's cached export
+ *
+ * An idle slot's references are dropped here; a slot with a borrow out
+ * is marked dead and its owner drops them when the borrow is returned.
+ * May be called with or without nn->nfsd_mutex held.
+ */
+void nfsd_exp_slots_drain(void)
+{
+	struct nfsd_exp_slot *s;
+
+	this_cpu_inc(nfsd_exp_borrow_pcpu.drain);
+	mutex_lock(&nfsd_exp_slots_mutex);
+	list_for_each_entry(s, &nfsd_exp_slots, link) {
+		struct nfsd_exp_pair pair = { };
+
+		spin_lock(&s->lock);
+		if (s->borrowed)
+			s->dead = true;
+		else
+			nfsd_exp_slot_take(s, &pair);
+		spin_unlock(&s->lock);
+		nfsd_exp_pair_put(&pair);
+	}
+	mutex_unlock(&nfsd_exp_slots_mutex);
+}
+
 struct svc_export *
 rqst_exp_parent(struct svc_rqst *rqstp, struct path *path)
 {
@@ -2423,6 +2760,7 @@ nfsd_export_flush(struct net *net)
 {
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 
+	nfsd_exp_slots_drain();
 	cache_purge(nn->svc_expkey_cache);
 	cache_purge(nn->svc_export_cache);
 }
