@@ -1,0 +1,14 @@
+settled.sh audit rest: the settled setting
+port a enp161s0f0: 29.58 GB/s sent, FIFO drops 0, ring drops 0
+      tx ring 0: 7.39 GB/s, 948k sends/s, 8 KiB a send, TSO 13%, stops 0, wakes 0, hw drops 0
+      tx ring 1: 7.39 GB/s, 948k sends/s, 8 KiB a send, TSO 14%, stops 0, wakes 0, hw drops 0
+      tx ring 2: 7.40 GB/s, 948k sends/s, 8 KiB a send, TSO 13%, stops 0, wakes 0, hw drops 0
+      tx ring 3: 7.39 GB/s, 948k sends/s, 8 KiB a send, TSO 13%, stops 0, wakes 0, hw drops 0
+port b enp164s0f0: 30.08 GB/s sent, FIFO drops 0, ring drops 0
+      tx ring 0: 7.37 GB/s, 946k sends/s, 8 KiB a send, TSO 13%, stops 0, wakes 0, hw drops 0
+      tx ring 1: 7.52 GB/s, 964k sends/s, 8 KiB a send, TSO 13%, stops 0, wakes 0, hw drops 0
+      tx ring 2: 7.67 GB/s, 983k sends/s, 8 KiB a send, TSO 13%, stops 0, wakes 0, hw drops 0
+      tx ring 3: 7.52 GB/s, 964k sends/s, 8 KiB a send, TSO 13%, stops 0, wakes 0, hw drops 0
+ab iperf3 -R -l 256K, 16 streams a port: total 59.66 GB/s sent
+CPUs busy: rings of a 33%, rings of b 26%, senders (8-55) 34%
+client CPUs: mean 32% busy (softirq 11%), 0 over 90%, busiest 57%; receive drops 0

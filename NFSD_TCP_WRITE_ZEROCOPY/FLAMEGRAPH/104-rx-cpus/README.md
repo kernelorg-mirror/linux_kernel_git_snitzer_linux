@@ -2616,3 +2616,15 @@ is past the card's transmit, whatever the server does.
 
 About to run (Mike: "yes, run iperf-tx.sh ab"): `iperf-tx.sh ab` as
 `t2-iperf-tx-1`, 16 streams a port, 20 s, through `step.sh`.
+
+**`t2-iperf-tx-1`: 59.66 GB/s, which does not measure the ceiling**
+([iperf-tx-1.out](iperf-tx-1.out)).  29.58 and 30.08 GB/s a port, no
+drop, queue stop or wake, every queue at 7.4 to 7.7 GB/s and 946k to
+983k sends a second, the senders 34% busy and the client 32%.  But the
+skbs were 8 KiB, one segment at the ports' MTU of 7792 (TSO 13% of
+sends), where NFS's replies are about 55 KB (t2-r791): the reversed
+iperf3 server writes with copies, one MSS at a time, so it reached
+about 950k packets a second a queue, not the queues' bytes.  NFS's
+READs carry 9 GB/s a queue in about 170k sends.  The ceiling in bytes
+needs large skbs from the sender: iperf3 run forward from tardis2 with
+`-Z` (sendfile), not yet run.
