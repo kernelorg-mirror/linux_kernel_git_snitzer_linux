@@ -444,7 +444,7 @@ what it is, and rename it once read.
 **tardis2's next boot (Mike, 17 November): build 534 with EFI pstore
 (the one-shot entry `ofp-rocky-534-pstore.conf`) and the hold-back
 fix's `sunrpc.ko` (`94F9970EBA48D601405AD7A`) in `updates/`.  Start
-at "The hold-back released last, and the next boot" at the end of
+at "Next boot: the hold-back fix on the rig" at the end of
 `NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/105-read-base/README.md`; the
 `svc_rtc_kunit` suite took the host down on 17 November and is not
 to be run again until its crash is understood.**
