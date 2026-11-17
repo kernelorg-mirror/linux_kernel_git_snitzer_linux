@@ -10,7 +10,7 @@
 # sums each stage over the sockets and divides it by the rate.
 n=${1:?waitq.sh <n>}
 H=$(cd "$(dirname "$0")" && pwd); O=/var/tmp/zc-run-logs/t2-r$n; mkdir -p $O; rm -f $O/skbshape.txt $O/waitq.txt
-. $H/../../xeu-rig/common.sh
+HD=$H; . $H/../../xeu-rig/common.sh; H=$HD
 SSHC="ssh -o BatchMode=yes -o ConnectTimeout=30 -i $KEY root@$CLIMGMT"
 (
 	for i in $(seq 1200); do [ -e $O/skbshape.txt ] && break; sleep 0.5; done
