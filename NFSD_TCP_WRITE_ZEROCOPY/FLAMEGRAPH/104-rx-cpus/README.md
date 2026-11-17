@@ -2897,3 +2897,25 @@ segments and `skmem t`, every queue's qdisc backlog and BQL in flight, and
 the client's Recv-Q; each stage's bytes over the rate is its wait.
 About to run, through `step.sh`: `EXP_RTC_BALANCE=Y
 EXP_RTC_CPUS=8,10,...,54 waitq.sh 820` (r819's placement), settled after.
+
+**r820 did not run**: `waitq.sh` sourced `common.sh`, which reset its own
+directory, so `client-read.sh` was not found; nothing reached the client
+or the settings.  Fixed (`HD`), not yet rerun.
+
+**Each connection's backlog, iperf3 against NFS** (Mike: "the nature of
+the backlog for each connection with iperf3, in contrast the backlog for
+NFS"; [ipq.sh](ipq.sh), `ipq-1`, ten samples at both ends):
+
+| a connection | iperf3 `-Z`, 32 at 95.53 GB/s | NFS READ at N (`t2-r815`), 24 at 73.02 |
+|---|---|---|
+| rate | 2.99 GB/s | 3.04 GB/s |
+| server Send-Q | 1.75 MB | 0.79 MB |
+| below TCP (`skmem t`) | 0.57 MB | |
+| client Recv-Q | 1.18 MB, 0.39 ms | 3.30 MB, 1.08 ms |
+
+Both carry about 3 GB/s a connection: iperf's 95 is 32 connections, NFS's
+73 is 24 (nconnect 12 a port).  iperf keeps its connections full at the
+server and the client drains them; NFS's replies wait three times as long
+unread at the client.  So 80 GB/s needs more connections or more a
+connection; nconnect 16 (r740) lost at N on the ring CPUs, before
+balanced placement or RFS took a connection's receive off them.
