@@ -131,3 +131,11 @@ figure here is the corrected one.)
 
 About to run (Mike: "re-run io_uring with fixedbufs"): `ab-engine.sh
 866:io_uring:fixed` through `step.sh /var/tmp/zc-run-logs/r107 engine2`.
+
+**t2-r866, io_uring with registered buffers again: 80.26 GB/s**
+(port a 40.15, port b 40.11), client busy 82% and 83%, client memory
+341.7 GB/s at 4.26 a byte, memcpy 33.24%, pinning under 0.2%,
+submission 8.68%, no io_uring workers, new kernel warnings 0.  Within
+0.03 GB/s of t2-r864: the gain repeats.  The passes stay on libaio
+until Mike decides.  Round 106 and 107's story is on the claude.ai page
+"NFSD Read Promised Count" (https://claude.ai/artifact/B7V1qW3uD5qGwX9DAhGDkz).
