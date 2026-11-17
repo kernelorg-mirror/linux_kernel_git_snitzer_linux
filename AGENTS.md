@@ -456,6 +456,13 @@ tardis2 reads 10 June until NTP corrects it, so its date says nothing
 and a later dump can collide with it: read `vmcore-dmesg.txt` to see
 what it is, and rename it once read.
 
+**On tardis2 now (17 November, 10:00), start at "Handoff (17
+November, 10:00): where round 106 stands" at the end of
+`NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/106-pending-base/README.md`:** the
+promised count is settled at 1.5 MiB (READ pass 79.24 GB/s), the host
+is still on the boot that ran it, and the limit has moved to the
+client; the next round is Mike's to choose.
+
 **tardis2's settled setting since 17 November (Mike: "settle the
 bound at 1.5 MiB in settled.sh, effectively replacing settled.sh with
 pending-settled.sh"): FLAMEGRAPH round 105's base and round 106's

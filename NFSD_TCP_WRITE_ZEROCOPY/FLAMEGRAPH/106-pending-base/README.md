@@ -431,3 +431,66 @@ NFS path: `xemi_tx_poll ... exceeded budget in poll`
 (`net/core/netpoll.c:151`) as netconsole sent `step.sh`'s burst of
 summary lines out of `enaxsl1i0` (`xsl_emi`); the first this boot, the
 trace all netconsole and netpoll, the load unaffected.
+
+## Handoff (17 November, 10:00): where round 106 stands
+
+**Read this first on tardis2.**  Round 106 is done: the promised count
+took READs from 73 to 79 GB/s and is settled.
+
+- **The host, as left:** the boot of build 534 that ran rounds 105 and
+  106, still up; kdump armed (`kexec_crash_loaded` 1); both ports
+  answering; `settled.sh audit` "the settled setting".  Running from
+  `updates/`: the promise stack, sunrpc `CFADF668BD58CB4A39A77E0`, nfsd
+  `603083CAF5F5B5E8DE898AC`, lockd `E80CADD7B3A4CF927760A78`,
+  auth_rpcgss, rpcsec_gss_krb5, rpcrdma, nfs_acl and nfs_localio (from
+  `/var/tmp/zc-run-logs/svcstack-promise-534/stack`).  The one-shot
+  entry `ofp-rocky-534-pstore.conf` (EFI pstore) is still armed for
+  the next boot; this boot does not have pstore.  Root has 3.0 GB
+  free; a pass needs 1.5 GB, a profile about 100 MB.
+- **The code:** the promised count is `49f022fca9378` at the tip
+  (worktree `/var/tmp/sunrpc-holdfix-534-tree`, `398bd70ca9b09` on
+  534's source), after the hold-back fix (`5562f5e440e7f`) and the
+  write-space fix (`6e2ea298a2dc3`).  A change to `struct
+  svc_rtc_conn` or `svc_rtc_rqst` re-versions sunrpc's exports
+  (gendwarfksyms): build with `build-svcstack.sh`, never a lone
+  `sunrpc.ko`.
+- **The settled setting (Mike, 17 November):** on tardis2
+  `svc_rtc_balance` Y, RFS 32768, `tcp_limit_output_bytes` 256 KiB,
+  `svc_rtc_send_max` 1.5 MiB, `TWO_NCONN` 16 (`140b7778583c1`).  Its
+  passes: WRITE t2-r858 77.83, READ t2-r859 79.24.
+  `pending-settled.sh` now sets nothing of its own.
+- **The figures:** the bound's sweep (256 KiB to 2 MiB, t2-r850 to
+  t2-r857) is in the tables above.  1.5 MiB is the peak: 79.03 and
+  78.88 in the strobe at 0.99 memory bytes a byte, 7 to 8 MB waiting
+  for the NIC; 2 MiB spills past the cache (36 MB, 1.46 a byte).  The
+  story and every field are on the claude.ai page "NFSD Read Promised
+  Count", https://claude.ai/artifact/B7V1qW3uD5qGwX9DAhGDkz (shared by
+  link; it updates live when republished from its file).
+- **Where the limit is now: the client** (t2-r860, the profile above).
+  The server's lock contention is gone and its CPUs are mostly idle;
+  the client's CPUs are 83 to 84% busy (busiest 95%), a third of its
+  cycles copying READ data out of skbs, and a reply waits 0.98 ms in
+  its receive queues.  The drives read 63 GB/s at 55% busy.
+
+**Next (Mike's call, not started):** the client is held untouched.
+Either work the server side to make the client's receive cheaper (how
+replies are segmented, the client's interrupt CPUs, its RPC slots), or
+lift the rule for a profile of the client's receive path.  Frame any
+result against round 104's contrast runs: iperf3 alone received 98.31
+GB/s on this client, copying too.
+
+**Learned today, for the rig:**
+
+- `twoport.sh` now keeps a write run's files when every marker was
+  valid at its start (`e2dec93477d4f`): a write check then a read check
+  reuse the same 17 GB (t2-r858, t2-r859).
+- A watch's stall test that counts the READ work items' `runs` is
+  false during WRITEs, which do not use them (t2-r858).  Test it only
+  on read loads, or on the wire's rate.
+- `step.sh` copies each output line to `/dev/kmsg` for netconsole; a
+  burst of them made the management port's driver warn
+  (`xemi_tx_poll ... exceeded budget in poll`, `netpoll.c:151`,
+  `xsl_emi` on `enaxsl1i0`).  It is not the NFS path, but a check
+  counts it as a new kernel warning.
+- `svc_rtc_kunit` is still not to be run: it took the host down on 17
+  November and why is not understood.
