@@ -5,6 +5,8 @@
  */
 #include <kunit/test.h>
 #include <linux/delay.h>
+#include <linux/in.h>
+#include <linux/net.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -2113,6 +2115,301 @@ static void rtc_e2e_stop_full(struct kunit *test)
 	rtc_e2e_done(test, e);
 }
 
+/*
+ * The send bound on a real service: svc_create() with a thread running
+ * svc_recv(), a TCP listener on loopback, and a client whose connection
+ * that thread accepts, so that svc_handle_xprt() gives it its work item.
+ * Calls and replies cross real TCP: the bound reads the real socket's send
+ * queue, svc_tcp_has_wspace() its SOCK_NOSPACE, and the receive held back
+ * is resumed by TCP's own write-space callback, svc_write_space().  The
+ * version is hidden, so that neither start nor teardown asks rpcbind.
+ */
+static const struct svc_version rtc_real_version = {
+	.vs_vers	= RTC_VERS,
+	.vs_nproc	= ARRAY_SIZE(rtc_procs),
+	.vs_proc	= rtc_procs,
+	.vs_xdrsize	= 64,
+	.vs_dispatch	= rtc_dispatch,
+	.vs_hidden	= true,
+};
+
+static const struct svc_version *rtc_real_versions[RTC_VERS + 1] = {
+	[RTC_VERS] = &rtc_real_version,
+};
+
+static struct svc_program rtc_real_program = {
+	.pg_prog		= RTC_PROG,
+	.pg_lovers		= RTC_VERS,
+	.pg_hivers		= RTC_VERS,
+	.pg_nvers		= ARRAY_SIZE(rtc_real_versions),
+	.pg_vers		= rtc_real_versions,
+	.pg_name		= "rtctest",
+	.pg_class		= "rtctest",
+	.pg_authenticate	= rtc_authenticate,
+	.pg_init_request	= svc_generic_init_request,
+};
+
+/* Calls each test pipelines: more replies than the client's window holds. */
+#define RTC_REAL_CALLS		128
+#define RTC_REAL_COUNT		12
+/* A call: record marker, then xid, CALL, 2, prog, vers, proc, two NULL auths, args. */
+#define RTC_REAL_CALL_WORDS	13
+/* A reply: marker, xid, REPLY, accepted, NULL verifier, success, count, words. */
+#define RTC_REAL_REPLY_WORDS	(8 + RTC_REAL_COUNT)
+/*
+ * With the bound at one byte each reply waits for the client's ACK, which
+ * a delayed ACK holds back up to TCP_DELACK_MAX (200 ms): the waits are
+ * long, and a hold is only a hold once no run comes for longer than that.
+ */
+#define RTC_REAL_WAIT_MS	20000
+#define RTC_REAL_STILL_MS	500
+
+struct rtc_real {
+	struct svc_serv *serv;
+	struct socket *client;
+	unsigned int send_max_saved;
+	struct rtc_e2e e;	/* rtc_e2e_cur: the procedure's mode */
+};
+
+/* nfsd()'s loop: receive and process until told to stop. */
+static int rtc_real_thread(void *data)
+{
+	struct svc_rqst *rqstp = data;
+
+	svc_thread_init_status(rqstp, 0);
+	while (!svc_thread_should_stop(rqstp))
+		svc_recv(rqstp, 0);
+	svc_exit_thread(rqstp);
+	return 0;
+}
+
+/* nfsd_destroy_serv()'s order, after the threads are stopped. */
+static void rtc_real_free(void *data)
+{
+	struct rtc_real *r = data;
+
+	svc_rtc_kunit_send_max(r->send_max_saved);
+	svc_set_num_threads(r->serv, 0, 0);
+	if (r->client)
+		sock_release(r->client);
+	svc_xprt_destroy_all(r->serv, &init_net, false);
+	if (rcu_access_pointer(r->serv->sv_rtc))
+		svc_rtc_unregister(r->serv);
+	svc_destroy(&r->serv);
+}
+
+/* The accepted connection; NULL until the thread has accepted it. */
+static struct svc_xprt *rtc_real_conn(struct rtc_real *r)
+{
+	struct svc_xprt *xprt;
+
+	spin_lock_bh(&r->serv->sv_lock);
+	xprt = list_first_entry_or_null(&r->serv->sv_tempsocks,
+					struct svc_xprt, xpt_list);
+	spin_unlock_bh(&r->serv->sv_lock);
+	return xprt;
+}
+
+static struct rtc_real *rtc_real_new(struct kunit *test)
+{
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+	};
+	struct rtc_real *r = kunit_kzalloc(test, sizeof(*r), GFP_KERNEL);
+	unsigned long deadline;
+	int port, ret;
+
+	KUNIT_ASSERT_NOT_NULL(test, r);
+	rtc_e2e_cur = &r->e;
+	r->e.mode = RTC_M_SYNC;
+	r->serv = svc_create(&rtc_real_program, 65536, rtc_real_thread);
+	KUNIT_ASSERT_NOT_NULL(test, r->serv);
+	r->send_max_saved = svc_rtc_kunit_send_max(0);
+	ret = kunit_add_action_or_reset(test, rtc_real_free, r);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	/* As nfsd_create_serv(): the hook before any listener. */
+	KUNIT_ASSERT_EQ(test, svc_rtc_register(r->serv, &rtc_e2e_ops), 0);
+	port = svc_xprt_create_from_sa(r->serv, "tcp", &init_net,
+				       (struct sockaddr *)&addr,
+				       SVC_SOCK_ANONYMOUS, current_cred());
+	KUNIT_ASSERT_GT(test, port, 0);
+	addr.sin_port = htons(port);
+	KUNIT_ASSERT_EQ(test, svc_set_num_threads(r->serv, 0, 1), 0);
+
+	ret = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP,
+			       &r->client);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	/* The smallest window: the replies fill it and stay in the send queue. */
+	sock_set_rcvbuf(r->client->sk, 0);
+	ret = kernel_connect(r->client, (struct sockaddr_unsized *)&addr,
+			     sizeof(addr), 0);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	deadline = jiffies + msecs_to_jiffies(RTC_REAL_WAIT_MS);
+	while (!rtc_real_conn(r) && time_before(jiffies, deadline))
+		msleep(1);
+	KUNIT_ASSERT_NOT_NULL(test, rtc_real_conn(r));
+	KUNIT_ASSERT_NOT_NULL(test, rtc_real_conn(r)->xpt_rtc);
+	return r;
+}
+
+static void rtc_real_send_calls(struct kunit *test, struct rtc_real *r,
+				u32 first, unsigned int n)
+{
+	__be32 *buf = kunit_kcalloc(test, n * RTC_REAL_CALL_WORDS,
+				    sizeof(*buf), GFP_KERNEL);
+	struct msghdr msg = { };
+	struct kvec iov;
+	unsigned int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, buf);
+	for (i = 0; i < n; i++) {
+		__be32 *p = buf + i * RTC_REAL_CALL_WORDS;
+		const u32 w[RTC_REAL_CALL_WORDS] = {
+			RPC_LAST_STREAM_FRAGMENT |
+				(RTC_REAL_CALL_WORDS - 1) * 4,
+			first + i, RPC_CALL, RPC_VERSION, RTC_PROG, RTC_VERS,
+			RTC_PROC_FAST, RPC_AUTH_NULL, 0, RPC_AUTH_NULL, 0,
+			first + i, RTC_REAL_COUNT,
+		};
+		unsigned int j;
+
+		for (j = 0; j < RTC_REAL_CALL_WORDS; j++)
+			p[j] = cpu_to_be32(w[j]);
+	}
+	iov.iov_base = buf;
+	iov.iov_len = n * RTC_REAL_CALL_WORDS * sizeof(*buf);
+	KUNIT_ASSERT_EQ(test, kernel_sendmsg(r->client, &msg, &iov, 1,
+					     iov.iov_len), (int)iov.iov_len);
+}
+
+/* Read @n replies to calls @first on, and check each one's every word. */
+static void rtc_real_read_replies(struct kunit *test, struct rtc_real *r,
+				  u32 first, unsigned int n)
+{
+	const size_t len = n * RTC_REAL_REPLY_WORDS * sizeof(__be32);
+	__be32 *buf = kunit_kzalloc(test, len, GFP_KERNEL);
+	unsigned long deadline = jiffies + msecs_to_jiffies(RTC_REAL_WAIT_MS);
+	size_t got = 0;
+	unsigned int i;
+
+	KUNIT_ASSERT_NOT_NULL(test, buf);
+	while (got < len && time_before(jiffies, deadline)) {
+		struct msghdr msg = { .msg_flags = MSG_DONTWAIT };
+		struct kvec iov = {
+			.iov_base = (u8 *)buf + got,
+			.iov_len = len - got,
+		};
+		int ret = kernel_recvmsg(r->client, &msg, &iov, 1, iov.iov_len,
+					 MSG_DONTWAIT);
+
+		if (ret > 0)
+			got += ret;
+		else if (ret == -EAGAIN)
+			msleep(1);
+		else
+			break;
+	}
+	KUNIT_ASSERT_EQ(test, got, len);
+	for (i = 0; i < n; i++) {
+		const __be32 *p = buf + i * RTC_REAL_REPLY_WORDS;
+		const u32 x = first + i;
+		unsigned int j;
+
+		KUNIT_EXPECT_EQ(test, be32_to_cpu(p[0]),
+				RPC_LAST_STREAM_FRAGMENT |
+				(RTC_REAL_REPLY_WORDS - 1) * 4);
+		KUNIT_EXPECT_EQ(test, be32_to_cpu(p[1]), x);
+		KUNIT_EXPECT_EQ(test, be32_to_cpu(p[2]), (u32)RPC_REPLY);
+		KUNIT_EXPECT_EQ(test, be32_to_cpu(p[3]), (u32)RPC_MSG_ACCEPTED);
+		KUNIT_EXPECT_EQ(test, be32_to_cpu(p[6]), (u32)RPC_SUCCESS);
+		KUNIT_EXPECT_EQ(test, be32_to_cpu(p[7]), RTC_REAL_COUNT);
+		for (j = 0; j < RTC_REAL_COUNT; j++)
+			KUNIT_EXPECT_EQ(test, be32_to_cpu(p[8 + j]),
+					x * 2654435761u + j);
+	}
+}
+
+/*
+ * The first call arms the work items' rqst pool and goes to the thread
+ * while it fills (svc_rtc_pool_arm()); one call at a time until a reply
+ * comes from a work item.
+ */
+static void rtc_real_warm(struct kunit *test, struct rtc_real *r, u32 *xid)
+{
+	struct svc_rtc_stats a, b;
+	unsigned int i;
+
+	svc_rtc_stats_sum(&a);
+	for (i = 0; i < 100; i++) {
+		rtc_real_send_calls(test, r, *xid, 1);
+		rtc_real_read_replies(test, r, *xid, 1);
+		(*xid)++;
+		svc_rtc_stats_sum(&b);
+		if (b.fast_completed != a.fast_completed)
+			return;
+		msleep(10);
+	}
+	KUNIT_FAIL(test, "no call was served on the work item");
+}
+
+/*
+ * A receive held back for a full send queue releases the transport, and
+ * the write-space callback resumes it.  With the bound at one byte, a
+ * work item takes no call while a reply is unacknowledged.  The client
+ * sends more calls than its window has room for replies and reads none:
+ * the window closes, the replies stay in the server's send queue, and
+ * the receive is held back with calls left unread.  The transport must
+ * then be free (no XPT_BUSY), or no enqueue reaches it again, and the
+ * service's teardown waits forever.  The client then reads: the window
+ * opens, ACKs shrink the queue, and every call is answered, in order.
+ */
+static void rtc_real_send_full_resumed(struct kunit *test)
+{
+	struct rtc_real *r = rtc_real_new(test);
+	struct svc_xprt *xprt = rtc_real_conn(r);
+	unsigned long deadline, still;
+	struct svc_rtc_stats a, b;
+	unsigned int i;
+	u64 held, ran;
+	u32 xid = 1;
+
+	rtc_real_warm(test, r, &xid);
+	svc_rtc_stats_sum(&a);
+	held = svc_rtc_kunit_send_full();
+	svc_rtc_kunit_send_max(1);
+	rtc_real_send_calls(test, r, xid, RTC_REAL_CALLS);
+
+	/* Held back once the window is shut: no run for RTC_REAL_STILL_MS. */
+	deadline = jiffies + msecs_to_jiffies(RTC_REAL_WAIT_MS);
+	still = jiffies;
+	ran = a.runs;
+	do {
+		msleep(10);
+		svc_rtc_stats_sum(&b);
+		if (b.runs != ran) {
+			ran = b.runs;
+			still = jiffies;
+		}
+	} while (time_before(jiffies, still +
+				     msecs_to_jiffies(RTC_REAL_STILL_MS)) &&
+		 time_before(jiffies, deadline));
+	KUNIT_ASSERT_TRUE(test, time_after_eq(jiffies, still +
+				msecs_to_jiffies(RTC_REAL_STILL_MS)));
+	KUNIT_EXPECT_GT(test, svc_rtc_kunit_send_full() - held, 0ULL);
+	KUNIT_EXPECT_LT(test, b.fast_completed - a.fast_completed,
+			(u64)RTC_REAL_CALLS);
+	KUNIT_EXPECT_TRUE(test, test_bit(XPT_DATA, &xprt->xpt_flags));
+	KUNIT_EXPECT_FALSE(test, test_bit(XPT_BUSY, &xprt->xpt_flags));
+
+	rtc_real_read_replies(test, r, xid, RTC_REAL_CALLS);
+	svc_rtc_stats_sum(&b);
+	KUNIT_EXPECT_EQ(test, b.fast_completed - a.fast_completed,
+			(u64)RTC_REAL_CALLS);
+	for (i = 0; i < SVC_RTC_NR_REASONS; i++)
+		KUNIT_EXPECT_EQ(test, RTC_FB(a, b, i), 0ULL);
+}
+
 /* M2: a miss hands off with its region credit returned; the rerun admits. */
 static void rtc_e2e_region_handoff_balanced(struct kunit *test)
 {
@@ -2324,6 +2621,7 @@ static struct kunit_case svc_rtc_test_cases[] = {
 	KUNIT_CASE(rtc_e2e_vs_count_once),
 	KUNIT_CASE(rtc_e2e_teardown_inflight),
 	KUNIT_CASE(rtc_e2e_stop_full),
+	KUNIT_CASE_SLOW(rtc_real_send_full_resumed),
 	KUNIT_CASE(rtc_e2e_region_handoff_balanced),
 	KUNIT_CASE(rtc_e2e_no_mem),
 	KUNIT_CASE(rtc_e2e_no_slot),
