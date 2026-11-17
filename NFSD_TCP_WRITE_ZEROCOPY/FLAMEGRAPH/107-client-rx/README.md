@@ -102,3 +102,29 @@ where libaio's t2-r862 had none, read as 93% busy for the same work
 %idle and %iowait, with iowait given beside it; t2-r863's summary was
 written again with it (84% and 83%).  Summaries before t2-r863 had no
 iowait to speak of and are unchanged by it.
+
+**The A/B: io_uring with registered buffers reads 80.23 GB/s**, the
+first NFS READ on the rig above 80.  New kernel warnings 0 in each.
+
+| run | engine | GB/s | client busy | client memory | a byte | memcpy | pinning | submission | iou-wrk |
+|---|---|---|---|---|---|---|---|---|---|
+| t2-r862 | libaio | 78.73 | 84% / 82% | 335.5 GB/s | 4.26 | 32.01% | 2.61% | 11.45% | 0 |
+| t2-r863 | io_uring | 78.75 | 84% / 83% (iowait 9.4%) | 335.6 GB/s | 4.26 | 32.17% | 2.61% | 11.21% | 0 |
+| t2-r864 | io_uring, `fixedbufs=1` | **80.23** | 83% / 81% | 338.7 GB/s | 4.22 | 32.72% | under 0.2% | **8.55%** | 0 |
+| t2-r865 | libaio | 78.61 | 84% / 84% | 340.7 GB/s | 4.33 | 32.47% | 2.62% | 11.45% | 0 |
+
+(t2-r863's row as printed read 93% busy, counting its iowait; the
+figure here is the corrected one.)
+
+- **Plain io_uring changes nothing** but where the wait is counted:
+  the same rate, copy, pinning and submission as libaio, no io_uring
+  workers (NFS's direct path takes the nonblocking submit).
+- **Registered buffers take the pinning out** (`try_grab_folio_fast`,
+  2.61%, falls under the profile's floor) and **a quarter of the
+  submission** (11.45% to 8.55% of the client's cycles), and the rate
+  rises 1.9% with the client a little less busy.  The two libaio runs
+  either side are 0.12 GB/s apart.
+- **The copy is as it was** (4.22 to 4.33 bytes of the client's memory
+  a byte), and it is still the limit: a third of the client's cycles.
+- One run of each.  Using it for the passes would change their shape,
+  which is Mike's to decide; the passes stay on libaio until then.
