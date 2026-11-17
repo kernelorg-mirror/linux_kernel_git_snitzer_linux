@@ -2526,19 +2526,23 @@ written once by r800 and kept):
 | `t2-r810` | 512 | 61.88 | | | |
 
 At 1 every reply went out zero copy (7.85 M) and every page was freed at
-completion (133.5 M "over"), and nothing backed up: the drives set the
-figure, as at 0.  So the zero-copy send is not the cause; handing the
+completion (133.5 M "over"), and nothing backed up, as at 0.  So the zero-copy send is not the cause; handing the
 same pages back is.  Why the NIC drains recycled pages more slowly (the
 SMMU, or a page the drive has just written) was not looked into.  The
 zero-copy send alone took about a tenth less of the rtc CPUs' time a
-GB/s (0.50% against 0.55%) and no more of the rings', from one pair, with
-the drives the limit: not kept on its own.  r810 was not needed (r809
+GB/s (0.50% against 0.55%) and no more of the rings', from one pair, at the
+same rate within the spread: not kept on its own.  r810 was not needed (r809
 had answered) and ran anyway.
 
-At 0 the figure is the drives': in every run at 0 all eight were 100%
-busy and the total is the sum of their rates, 9.0 to 9.6 GB/s each on
-port a and 7.5 to 9.2 on port b (Mike: "at 70.54 GB/s it too was quite
-low, rather than around 73+").
+Wrong, and corrected (Mike: "saying the drives are 100% is absurd"):
+this said the figure at 0 is the drives', since every drive was "100%
+busy" and the total is the sum of their rates.  "Busy" is the share of
+time a drive had a command outstanding, which says nothing of an NVMe
+drive's headroom: the drives read 104.5 GB/s locally (13 a drive,
+`readprobe.sh`, above), and under NFS they had 6 to 7.3 commands of
+256 KiB in flight (8.8 GB/s a drive).  The run-to-run spread at 0
+(70.27 to 73.93) is in how many commands reach them, not in what they
+can do.
 
 **Dropped (Mike: "drop the recycle")**: the five commits are
 `patches/dropped/0020` to `0024`, removed at the tip in group order
