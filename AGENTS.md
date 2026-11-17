@@ -466,6 +466,14 @@ promised count is settled at 1.5 MiB (READ pass 79.24 GB/s), the host
 is still on the boot that ran it, and the limit has moved to the
 client; the next round is Mike's to choose.
 
+**4 KiB random-READ IOPS and the client's scaling have their own
+project document since 17 November (Mike):
+`NFSD_TCP_WRITE_ZEROCOPY/IOPS.md`.**  It has where IOPS stand (1.05 M
+on David Flynn's setting, `xeu-rig/settled-iops.sh`), what limits the
+client (the workqueue pool lock rpciod and xprtiod share, t2-r880), the
+canary-WIP commits that remove it, and the next steps once the client
+runs the canary-WIP tip.
+
 **tardis2's settled setting since 17 November (Mike: "settle the
 bound at 1.5 MiB in settled.sh, effectively replacing settled.sh with
 pending-settled.sh"): FLAMEGRAPH round 105's base and round 106's
