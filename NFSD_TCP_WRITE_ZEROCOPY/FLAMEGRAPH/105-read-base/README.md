@@ -165,5 +165,26 @@ taken off, its `svc_xprt.c` is `sunrpc-sendmax-534`'s byte for byte).
 `/var/tmp/zc-run-logs/sunrpc-holdfix-534/`: no warning but the
 compiler's version, 442 exports with no version changed.
 
-The KUnit case for a held-back receive resumed by write space is not
-written yet.
+**The KUnit case, `rtc_real_send_full_resumed`** (`38a1ebfd0b1ea`,
+its interface `d360e7859a809`): on a real service, not the suite's fake
+transport (Mike: a fake transport is a fiction the test hopes stays
+true).  `svc_create()` with a thread running `svc_recv()`, a TCP
+listener on loopback and a client the thread accepts, so that
+`svc_handle_xprt()` attaches the work item; the version is hidden, so
+nothing asks rpcbind (the fixture is `fs/nfsd/nfsd_kunit_svc.h`'s, with
+the thread receiving).  With `svc_rtc_send_max` at 1, the client sends
+128 calls at its smallest window and reads none; once no run has come
+for 500 ms, the receive must have been held back (`send_full` up, fewer
+than 128 served) with `XPT_DATA` set and `XPT_BUSY` clear.  The client
+then reads all 128 replies, each checked word for word, all from the
+work item, no fallback.  Without the fix the `XPT_BUSY` check fails and
+the read times out after 20 s, and the teardown then hangs in
+`svc_xprt_destroy_all()` as nfsd's did: the case is not to be run
+against `sunrpc-sendmax-534`.
+
+For 534, both commits on the worktree (`87a87bd2d5be3`), built with
+`build-sunrpc.sh` into `/var/tmp/zc-run-logs/sunrpc-holdfix-kunit-534/`:
+no warning but the compiler's version, 442 exports with no version
+changed; `sunrpc.ko` `6FB8AB5B48500088A19D991` (the fix with the
+interface, which the suite needs), `svc_rtc_kunit.ko`
+`459E7C2D37A6A0314A7456F`.  **Not loaded or run.**
