@@ -331,3 +331,23 @@ To be seen at the next write and read checks.
 this").  About to run, through `xeu-rig/step.sh
 /var/tmp/zc-run-logs/r106-promise sweep ...`: `ab.sh 854:1572864:16
 855:2097152:16 856:1048576:16`, 1 MiB again last for its spread.
+
+**The sweep: 1.5 MiB reads 79.03 GB/s, the best NFS READ on the rig.**
+New kernel warnings 0 in each.
+
+| run | bound | GB/s | DMA | memory | a byte | cache fills | not sent | below TCP | Send-Q | held | waiting for the NIC | cycles a KiB | held back |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| t2-r854 | 1.5 MiB | **79.03** | 158.1 | 78.0 | 0.99 | 90.5 | 0.16 MB | 0.09 MB | 0.40 MB | 16 MB | 8 MB | 468 / 145 / 613 | 4859440 |
+| t2-r855 | 2 MiB | 76.12 | 152.2 | 110.9 | 1.46 | 87.4 | 0.93 MB | 0.18 MB | 1.10 MB | 41 MB | 36 MB | 454 / 163 / 618 | 4752799 |
+| t2-r856 | 1 MiB | 73.59 | 147.2 | 55.8 | 0.76 | 85.6 | 0.22 MB | 0.06 MB | 0.30 MB | 12 MB | 9 MB | 541 / 159 / 700 | 6430987 |
+
+- 1.5 MiB moves 158 GB/s of DMA through 78 GB/s of memory, more DMA
+  than fio and iperf3 mixed (137.6 through 140.8): +10.7% over the
+  settled row (t2-r853), with fewer cycles a KiB than 1 MiB.
+- At 2 MiB a connection admits more than its socket sends: 0.93 MB a
+  socket waits unsent in TCP, 36 MB waits for the NIC, past the 32 MiB
+  cache, and memory jumps to 1.46 a byte, as on the base without the
+  count.  The peak is near 1.5 MiB, the largest bound whose backlog
+  fits the cache.
+- 1 MiB again: 73.59 against t2-r850's 75.18, memory 0.76 against 0.74.
+- 1.5 MiB to run again for its spread (Mike), `ab.sh 857:1572864:16`.
