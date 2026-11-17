@@ -100,6 +100,65 @@ On the O_DIRECT path, also on the tip and not on build 469:
   `xprt_numa_map` homes port a's mounts on node 0 and port b's on
   node 1.
 
+## The client on the canary-WIP tip: 1.81 M IOPS (17 November, evening)
+
+The client booted build 541 (`7.3.3-16.hs.541.canary.el9.x86_64`, the
+canary-WIP tip, every commit of the tables above in it, and both of
+`patches/client/`).  Same server, same load (`settled-iops.sh`, iodepth
+32, 1,536 READs in flight):
+
+| | build 469 (t2-r875 to r877) | build 541 (t2-r883 to r887) |
+|---|---|---|
+| M IOPS, median / min | 1.05 / 1.05 | **1.82 / 1.81** (1.81 to 1.86) |
+| completion mean / p99 | 1.46 / 4.2 ms | 0.82 to 0.87 / 2.9 to 3.0 ms |
+| client busy (busiest CPU) | 94 to 95% (96 to 97%) | 61 to 63% (68 to 75%) |
+| client cycles in spin-lock slowpath | 63.5% | 13.4% |
+| server busy (busiest CPU) | 48 to 49% (63 to 66%) | 54 to 56% (87 to 92%) |
+
+**Neither end is saturated now.**  The rate is 1,536 in flight over
+0.84 ms: what decides it is how long a READ takes, round trip, not
+any one CPU being full.  Where the time goes (t2-r886 server, t2-r887
+client, 8 s at 999 Hz on both):
+
+- **Server, 56% busy, nfsd's work CPUs (8-55) 66% on average, two of
+  them over 85%.**  READs run in rtc work items (`svc_rtc_work` 70% of
+  all samples, idle included), not in nfsd threads (`nfsd` 2.5%).  Of
+  it: `nfsd3_proc_read` 18.9% (XFS and the drive 9.8%), the TCP send
+  11.4%, the receive 8.0%, and **the per-request checks 10.4%**:
+  `fh_verify` 6.9% (`nfsd_set_fh_dentry` 5.9%, `rqst_exp_find` 2.6%)
+  and `svc_set_client` 3.5% (`svcauth_unix_set_client` 3.3%), with
+  `try_module_get`/`module_put` 1.4% each and `sunrpc_cache_find_rcu`
+  1.6% in their self costs.  That is the cost David's 18 and 19
+  (borrowing the export) take away, and it is in neither this tree nor
+  build 534.
+- **Client, 63% busy.**  Spin-lock slowpath 13.4%: `queue_work_on`
+  10.1% and the worker's own dequeue, mostly xprtiod's two unbound
+  pools (`kworker/u213`, `u214`), which `twoport.sh` holds at
+  `affinity_scope` numa for the run (`CLI_SCOPE`; build 541's own
+  default is cache_shard).  rpciod (per-CPU) is 23.7% with its
+  children and contends no more.
+
+## Round 109: what to chase next
+
+In order, each an A/B under `settled-iops.sh` at iodepth 32, three
+runs a side, with t2-r883 to r887 the base:
+
+1. **The server's `pool_mode`, `auto` against `pernode`** (below,
+   Mike: the server A/B on this list).  Expected to matter little for
+   READs, which do not run on nfsd's threads; it settles the question
+   David's setup raises.
+2. **Depth: iodepth 16 and 64** on the new client, to see whether the
+   rate now follows the number in flight (latency-bound) or holds (a
+   limit somewhere).
+3. **The server's spread: 128 connections on 48 work CPUs** (2.67 a
+   CPU, two CPUs over 85%).  nconnect 12 (96, two a CPU) and 18 (144,
+   three) against 16.
+4. **The client's xprtiod**: `CLI_SCOPE=cache_shard` (build 541's
+   default) against numa, then xprtiod per-CPU if the lock stays.
+5. **Port David's 18 and 19** (an nfsd thread borrows the export, no
+   shared reference a request) if the server becomes the limit: 10% of
+   the server's samples are the checks it shortens.
+
 ## The server side: `xeu-rig/settled-iops.sh`
 
 `settled.sh`'s setting with David's server values held over it:
