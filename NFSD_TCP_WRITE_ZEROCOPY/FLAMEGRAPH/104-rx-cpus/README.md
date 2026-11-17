@@ -2888,3 +2888,12 @@ back the offered load, and the two nearly cancel.  The placement is not
 written.  (The run's own settle after kept `EXP_RTC_CPUS`, inherited from
 the shell; `settled.sh apply` without it put `svc_rtc_cpus` back to
 8-55, balance N.)
+
+## Where a reply's bytes wait (Mike, 17 November: "use the balanced placement that you just did with Y")
+
+[waitq.sh](waitq.sh) and [waitq.py](waitq.py): ten samples in the strobe's
+window, each at one instant, of every NFS socket's Send-Q, unacked
+segments and `skmem t`, every queue's qdisc backlog and BQL in flight, and
+the client's Recv-Q; each stage's bytes over the rate is its wait.
+About to run, through `step.sh`: `EXP_RTC_BALANCE=Y
+EXP_RTC_CPUS=8,10,...,54 waitq.sh 820` (r819's placement), settled after.
