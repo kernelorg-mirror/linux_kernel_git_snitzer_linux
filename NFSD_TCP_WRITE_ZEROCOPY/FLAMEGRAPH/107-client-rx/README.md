@@ -128,3 +128,6 @@ figure here is the corrected one.)
   a byte), and it is still the limit: a third of the client's cycles.
 - One run of each.  Using it for the passes would change their shape,
   which is Mike's to decide; the passes stay on libaio until then.
+
+About to run (Mike: "re-run io_uring with fixedbufs"): `ab-engine.sh
+866:io_uring:fixed` through `step.sh /var/tmp/zc-run-logs/r107 engine2`.
