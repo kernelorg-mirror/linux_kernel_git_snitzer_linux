@@ -2643,3 +2643,19 @@ card's limit.  Correction to `t2-iperf-tx-1` above: `xeu`'s "8 KiB a
 send, TSO 13%" reads the same here at 100 GB/s, so it is not the size
 of the stack's skbs and that run was not held by a packet rate; it was
 held by the reversed iperf3 server's copy.
+
+## Why the transmit queues drain slowly (Mike, 17 November: "go ahead, find why the queues drain slowly")
+
+Each transmit queue completes on its own odd ring CPU (`Tx-i` on 1, 3,
+5, 7 and 57 to 63; the receive rings on the even ones), in `xeu`'s
+`xeu_tx_poll()`: it unmaps and consumes the skbs, reports them to BQL
+and wakes a stopped queue, whose qdisc then runs in NET_TX on that CPU.
+[txdrain.bt](txdrain.bt) measures, 5 s in the strobe's window: softirq
+time by CPU group and vector, the skbs handed to the driver by group,
+`__netif_schedule()` calls, an skb's time from the driver's transmit to
+its consume, each transmit poll's work and its time from the queue's
+interrupt; [txdrain.sh](txdrain.sh) runs it in the strobe with
+`svc_rtc_balance` at Y or N and samples every queue's BQL limit and
+bytes in flight beside it.
+
+About to run, through `step.sh`: `txdrain.sh 811 N`, then `812 Y`.

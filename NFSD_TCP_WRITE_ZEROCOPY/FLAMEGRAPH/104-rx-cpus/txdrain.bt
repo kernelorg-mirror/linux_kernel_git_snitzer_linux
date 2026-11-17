@@ -1,0 +1,70 @@
+/*
+ * txdrain.bt: why a port's transmit queues drain slowly under READs (round
+ * 104, 17 November: Mike, "find why the queues drain slowly").  5 s inside
+ * a READ strobe's window.  CPU groups: rtc (8-55, the work items), rx (the
+ * even ring CPUs, receive interrupts) and txc (the odd ring CPUs, each a
+ * transmit queue's completion interrupt).
+ *  - softirq time by group and vector (NET_TX, NET_RX, TASKLET, ...);
+ *  - skbs handed to the driver by group (net_dev_start_xmit) and
+ *    __netif_schedule() calls (a qdisc left to run later in NET_TX);
+ *  - an skb's time from the driver's transmit to its consume (one skb in
+ *    16 by address, 1000 bytes or more), by the consuming group;
+ *  (BQL's bytes in flight are sampled from sysfs beside it, by txdrain.sh:
+ *  dql_completed() cannot be probed.)
+ *  - each transmit NAPI poll on the txc CPUs: its work, and the time from
+ *    the queue's interrupt to the poll's end.
+ */
+tracepoint:irq:softirq_entry { @se[cpu] = nsecs; }
+tracepoint:irq:softirq_exit /@se[cpu]/
+{
+	$g = (cpu >= 8 && cpu <= 55) ? "rtc" : ((cpu & 1) ? "txc" : "rx");
+	$v = args.vec == 2 ? "NET_TX" : (args.vec == 3 ? "NET_RX" :
+	     (args.vec == 6 ? "TASKLET" : (args.vec == 9 ? "RCU" : "other")));
+	@softirq_us[$g, $v] = sum((nsecs - @se[cpu]) / 1000);
+	delete(@se[cpu]);
+}
+
+tracepoint:net:net_dev_start_xmit
+{
+	$g = (cpu >= 8 && cpu <= 55) ? "rtc" : ((cpu & 1) ? "txc" : "rx");
+	@xmit_skbs[$g] = count();
+	@xmit_bytes[$g] = sum(args.len);
+	if (args.len >= 1000 && (((uint64)args.skbaddr >> 8) & 15) == 0) {
+		@t[(uint64)args.skbaddr] = nsecs;
+	}
+}
+
+tracepoint:skb:consume_skb /@t[(uint64)args.skbaddr]/
+{
+	$g = (cpu >= 8 && cpu <= 55) ? "rtc" : ((cpu & 1) ? "txc" : "rx");
+	$us = (nsecs - @t[(uint64)args.skbaddr]) / 1000;
+	@xmit_to_consume_us[$g] = hist($us);
+	@xmit_to_consume_stats[$g] = stats($us);
+	delete(@t[(uint64)args.skbaddr]);
+}
+
+kprobe:__netif_schedule
+{
+	@netif_schedule[(cpu >= 8 && cpu <= 55) ? "rtc" : ((cpu & 1) ? "txc" : "rx")] = count();
+}
+
+tracepoint:irq:irq_handler_entry /cpu < 8 || cpu >= 56/
+{
+	if (cpu & 1) { @irq[cpu] = nsecs; }
+}
+
+tracepoint:napi:napi_poll /(cpu < 8 || cpu >= 56) && (cpu & 1)/
+{
+	@txpoll_work = hist(args.work);
+	@txpoll_work_stats = stats(args.work);
+	if (@irq[cpu]) {
+		@txirq_to_poll_end_us = hist((nsecs - @irq[cpu]) / 1000);
+		delete(@irq[cpu]);
+	}
+}
+
+interval:s:5
+{
+	clear(@t); clear(@se); clear(@irq);
+	exit();
+}
