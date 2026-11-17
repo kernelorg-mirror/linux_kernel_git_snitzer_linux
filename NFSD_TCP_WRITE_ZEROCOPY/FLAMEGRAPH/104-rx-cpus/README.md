@@ -2577,3 +2577,39 @@ memory side: the IORT names the platform "XSIGHT E1.EVB", the NIC is
 the SoC's own, and a reused page's lines were written by a drive just
 before the NIC reads them through the SoC's fabric and system cache.
 Finding that would take the SoC's uncore counters; not pursued.
+
+## Why one CPU a connection lost (Mike, 17 November: "go ahead with step 1")
+
+The aim (Mike: "we have baseline for what works effectively with local
+fio testing, to get rate of 13GB/s per drive"): a drive answers a
+256 KiB command in about 220 us, so its rate is its commands
+outstanding; NFS keeps 6 to 7.3 a drive (8.4 to 8.8 GB/s), 10 GB/s a
+drive needs about 8.5.  The calls wait 3.4 ms of a READ's 5.6 unread
+at the server (t2-r774), for their connection's one work item, and
+the ten connections that share five CPUs two to a CPU (100% busy) pace
+the rest.  `svc_rtc_balance` Y (t2-r744) gives each its own CPU and
+read 67.63 against r739's 72.76, the ring CPUs 61% busy against 34%.
+From the files both runs kept (their `perf-rx-*` are empty), no run:
+
+- **Not XPS, not placement on the NIC.**  tardis2's map is `xps_rxqs`
+  (a reply goes out on the transmit queue of its flow's receive ring,
+  whatever CPU sends it), both runs placed the flows 3/3/3/3 on each
+  port's four rings, and the host is one NUMA node with one 32 MiB L3.
+- **The transmit moved onto the ring CPUs.**  NET_TX softirqs a READ
+  on the ring CPUs: 1.27 in r744 against 0.22 in r739 (NET_RX 2.32
+  against 2.70).  `xeu`'s own queue stops (`ring_*_tx_tx_stop_q`) are
+  0 in both, so the stops are BQL's: a stopped queue's packets wait in
+  fq_codel and the completion's softirq on a ring CPU sends them.  The
+  rings then dropped frames (1,149 against 30).
+- **It is the recycle's signature.**  At recycle 512 every transmit
+  queue sat at its BQL limit (about 1 MB) and each port carried 31 GB/s;
+  at 0 they were a third full and carried 35 (t2-r790, r791).  Both
+  losses are a port's transmit queues filling.  Each port has four
+  (`ethtool -l`: combined 4, the maximum), about 9 GB/s a queue at 72.
+
+So a connection's own CPU was not refused for the CPU's sake: spread
+over more CPUs, the replies reach the four queues faster than they
+drain.  Whether four queues a port carry more than about 37 GB/s out is
+unmeasured: `xeu-rig/iperf-tx.sh ab` (written 16 November, never run)
+measures it without NFS or drives.  If they do not, 80 GB/s of READs
+is past the card's transmit, whatever the server does.
