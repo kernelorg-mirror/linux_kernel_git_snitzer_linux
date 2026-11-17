@@ -81,3 +81,14 @@ load when percpu came into settled-iops.sh (its directory is
   the pace: the next limit is how the work is spread over the server's
   CPUs, item 3 of the plan.
 - New kernel warnings 0 in all four; settled.sh's setting after.
+
+## 3. The server's spread: nconnect 12 and 18 at iodepth 64
+
+Mike, 17 November: "run the nconnect 12 and 18 A/B at iodepth 64".  At
+nconnect 16 the eight mounts make 128 connections on nfsd's 48 work
+CPUs, 2.67 a CPU, and the busiest CPU is full (98%) while the mean is
+67%.  nconnect 12 makes 96 (two a CPU), 18 makes 144 (three).  In
+turns, with 16 again beside them (t2-r896 and r898 are its first two):
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 nconn ./settled-iops.sh run \
+        ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 899:64:12 900:64:18 901:64:16 902:64:12 903:64:18 904:64:16
