@@ -2804,3 +2804,7 @@ iperf3 `-Z`'s pages are partly cache-resident (it sends the same buffer
 again), so its DMA and its memory traffic are not one to one either.
 NFS at N (t2-r815) sits at 116.5 GB/s of memory for 146 of DMA, in the
 same place as c4.
+
+About to run (Mike: "run fio capped at 60 and 70 with iperf"):
+`contrast.sh c5 both` at `FIORATE=7500000000` (60 GB/s) and `c6` at
+`8750000000` (70).
