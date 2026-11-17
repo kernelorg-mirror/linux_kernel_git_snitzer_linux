@@ -8,6 +8,15 @@
 #   nfsd threads 768          David's 2.2 (settled: 512)    EXP_NFSD_THREADS
 #   net.core.rmem_max, wmem_max 256 MiB                       EXP_SYSCTL
 #   net.ipv4.tcp_rmem, tcp_wmem "4096 1048576 268435456"   (his 2.4)
+#   sunrpc.pool_mode percpu   64 pools of 12 threads (settled: pernode,
+#                             one pool)                    EXP_POOL_MODE
+#
+# pool_mode percpu since 17 November (Mike: "for settled-iops.sh settle
+# percpu"): what auto picks, as David's servers ran, 1.93 M IOPS median
+# against pernode's 1.89 (FLAMEGRAPH round 109, t2-r888 to r893).  It
+# stays here and not in settled.sh: per-CPU pools cost WRITEs on builds
+# 512 and 514.  settled.sh restarts nfs-server to change it, on the way
+# in and again on the way out of "run".
 #
 # and, for "run", the load his section 4 describes, set in the environment
 # for twoport.sh (and so for FLAMEGRAPH/108-4k-randread/nfs4k.sh):
@@ -44,6 +53,7 @@
 # value here.  Nothing here changes the settled setting.
 cd "$(dirname "$0")" || exit 1
 export EXP_NFSD_THREADS=${EXP_NFSD_THREADS:-768}
+export EXP_POOL_MODE=${EXP_POOL_MODE:-percpu}
 export EXP_SYSCTL=${EXP_SYSCTL:-"net.core.rmem_max=268435456;net.core.wmem_max=268435456;net.ipv4.tcp_rmem=4096 1048576 268435456;net.ipv4.tcp_wmem=4096 1048576 268435456"}
 case "${1:-}" in
 apply|audit) exec ./settled.sh "$@" ;;
@@ -52,7 +62,7 @@ run)
 	export SRV_ALIAS=${SRV_ALIAS:-1} NCONN=${NCONN:-16} JOBS=${JOBS:-24} IODEPTH=${IODEPTH:-32}
 	export RW=${RW:-randread} BS=${BS:-4k} IOENGINE=${IOENGINE:-io_uring} FIXEDBUFS=${FIXEDBUFS-1}
 	"$@"; rc=$?
-	env -u EXP_NFSD_THREADS -u EXP_SYSCTL ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
+	env -u EXP_NFSD_THREADS -u EXP_SYSCTL -u EXP_POOL_MODE ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
 	echo "settled again: $(tail -1 /var/tmp/zc-run-logs/settled-iops-after.txt)"
 	exit $rc ;;
 *) echo "settled-iops.sh apply|audit|run <command ...>"; exit 1 ;;

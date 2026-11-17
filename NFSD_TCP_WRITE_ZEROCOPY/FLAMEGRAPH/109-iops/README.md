@@ -47,11 +47,19 @@ settles what David Flynn's setup (auto) assumed.
   ruled out for now** ("just leave pernode settled.  Nice to have ruled
   out percpu at this time").  The rest of round 109 runs at pernode.
 
+- **Then, for IOPS (Mike, 17 November, on 1.96 being percpu's): "for
+  settled-iops.sh settle percpu".**  `settled-iops.sh` holds
+  `EXP_POOL_MODE=percpu` with its other values; settled.sh stays
+  pernode for the passes.  The rest of round 109 runs at percpu, with
+  t2-r888, r890 and r892 its iodepth-32 base.
+
 ## 2. Depth on the new client: iodepth 16 and 64
 
 Is the rate now set by the number in flight?  nfs4k.sh under
-settled-iops.sh at pernode, two runs at each of 16 and 64 in turns,
-iodepth 32 being t2-r883 to r887 and r889, r891, r893:
+settled-iops.sh (percpu), two runs at each of 16 and 64 in turns,
+iodepth 32 being t2-r888, r890 and r892.  t2-r894 was stopped in its
+load when percpu came into settled-iops.sh (its directory is
+`t2-r894-stopped-in-load`; settled.sh's setting put back after):
 
-    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 depth ./settled-iops.sh run \
-        ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 894:16 895:64 896:16 897:64
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 depth2 ./settled-iops.sh run \
+        ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 895:16 896:64 897:16 898:64
