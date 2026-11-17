@@ -1,0 +1,111 @@
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:23:29-53: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    @softirq_us[$g, $v] = sum((nsecs - @se[cpu]) / 1000);
+                               ~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:40:9-49: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    $us = (nsecs - @t[(uint64)args.skbaddr]) / 1000;
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:61:33-58: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @txirq_to_poll_end_us = hist((nsecs - @irq[cpu]) / 1000);
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:23:29-53: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    @softirq_us[$g, $v] = sum((nsecs - @se[cpu]) / 1000);
+                               ~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:40:9-49: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+    $us = (nsecs - @t[(uint64)args.skbaddr]) / 1000;
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:61:33-58: WARNING: signed operands for '/' can lead to undefined behavior (cast to unsigned to silence warning)
+        @txirq_to_poll_end_us = hist((nsecs - @irq[cpu]) / 1000);
+                                      ~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:23:29-34: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @softirq_us[$g, $v] = sum((nsecs - @se[cpu]) / 1000);
+                               ~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:23:37-45: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    @softirq_us[$g, $v] = sum((nsecs - @se[cpu]) / 1000);
+                                       ~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:40:9-14: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $us = (nsecs - @t[(uint64)args.skbaddr]) / 1000;
+           ~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:40:17-41: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+    $us = (nsecs - @t[(uint64)args.skbaddr]) / 1000;
+                   ~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:61:33-38: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @txirq_to_poll_end_us = hist((nsecs - @irq[cpu]) / 1000);
+                                      ~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:61:41-50: WARNING: Expression of type: uint64 being cast to type: int64. This may cause unexpected results. Use an explicit cast to suppress this warning.
+        @txirq_to_poll_end_us = hist((nsecs - @irq[cpu]) / 1000);
+                                              ~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:24:2-18: WARNING: Return value discarded.
+    delete(@se[cpu]);
+    ~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:43:2-34: WARNING: Return value discarded.
+    delete(@t[(uint64)args.skbaddr]);
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/104-rx-cpus/txdrain.bt:62:3-20: WARNING: Return value discarded.
+        delete(@irq[cpu]);
+        ~~~~~~~~~~~~~~~~~
+
+
+@netif_schedule[rx]: 1556
+@netif_schedule[rtc]: 37977
+@netif_schedule[txc]: 567866
+@softirq_us[rx, NET_TX]: 1047
+@softirq_us[txc, RCU]: 6142
+@softirq_us[rx, RCU]: 8336
+@softirq_us[txc, other]: 15609
+@softirq_us[rx, other]: 20745
+@softirq_us[rtc, NET_TX]: 34600
+@softirq_us[rtc, RCU]: 52325
+@softirq_us[rtc, other]: 63615
+@softirq_us[txc, NET_TX]: 1708312
+@softirq_us[txc, TASKLET]: 7374430
+@softirq_us[txc, NET_RX]: 12057449
+@softirq_us[rx, NET_RX]: 24786592
+@txirq_to_poll_end_us:
+[0]                 5688 |                                                    |
+[1]               631117 |@@@@@@@@@@@@@@@@@@@@                                |
+[2, 4)            918291 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                      |
+[4, 8)           1590138 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[8, 16)           273225 |@@@@@@@@                                            |
+[16, 32)           74585 |@@                                                  |
+[32, 64)           53253 |@                                                   |
+[64, 128)          17369 |                                                    |
+[128, 256)          1361 |                                                    |
+[256, 512)            96 |                                                    |
+[512, 1K)              8 |                                                    |
+[1K, 2K)               2 |                                                    |
+
+@txpoll_work:
+[0]               626958 |@@@@@@@@@@@@@@@@@                                   |
+[1]               393481 |@@@@@@@@@@@                                         |
+[2, 4)            130626 |@@@                                                 |
+[4, 8)            148970 |@@@@                                                |
+[8, 16)           372946 |@@@@@@@@@@                                          |
+[16, 32)         1821224 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[32, 64)          719702 |@@@@@@@@@@@@@@@@@@@@                                |
+[64, 128)         188205 |@@@@@                                               |
+
+@txpoll_work_stats: { .count = 4402112, .average = 19, .total = 85115734 }
+@xmit_bytes[rx]: 10631253555
+@xmit_bytes[txc]: 58059983710
+@xmit_bytes[rtc]: 412567985776
+@xmit_skbs[rx]: 245481
+@xmit_skbs[txc]: 1210879
+@xmit_skbs[rtc]: 7262363
+@xmit_to_consume_stats[rx]: { .count = 1, .average = 25, .total = 25 }
+@xmit_to_consume_stats[txc]: { .count = 1080422, .average = 40, .total = 43233940 }
+@xmit_to_consume_us[rx]:
+[16, 32)               1 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@xmit_to_consume_us[txc]:
+[4, 8)              5479 |                                                    |
+[8, 16)           165477 |@@@@@@@@@@@@@@@@@@@@                                |
+[16, 32)          412971 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[32, 64)          275983 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                  |
+[64, 128)         207999 |@@@@@@@@@@@@@@@@@@@@@@@@@@                          |
+[128, 256)         11968 |@                                                   |
+[256, 512)           469 |                                                    |
+[512, 1K)             51 |                                                    |
+[1K, 2K)              18 |                                                    |
+[2K, 4K)               0 |                                                    |
+[4K, 8K)               7 |                                                    |
+

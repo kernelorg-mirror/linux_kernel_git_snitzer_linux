@@ -2659,3 +2659,33 @@ interrupt; [txdrain.sh](txdrain.sh) runs it in the strobe with
 bytes in flight beside it.
 
 About to run, through `step.sh`: `txdrain.sh 811 N`, then `812 Y`.
+
+**t2-r811 (balance N) 71.66 GB/s, r812 (Y) 66.92**, the strobe on the
+same files, settled after (`txdrain-811.txt`, `txdrain-812.txt`).  Over
+the probe's 5 s; "txc" are the eight odd ring CPUs (40 CPU-seconds),
+"rx" the eight even ones:
+
+| | r811, N | r812, Y |
+|---|---|---|
+| reply bytes to the driver from the work items / from txc's NET_TX | 412 / 58 GB (86% / 12%) | 217 / 207 GB (51% / 49%) |
+| `__netif_schedule()` on txc | 0.57 M | 2.91 M |
+| txc softirq s: transmit NAPI (NET_RX) / TSQ (TASKLET) / NET_TX | 12.1 / 7.4 / 1.7 (53% busy) | 12.6 / 8.6 / 8.7 (75%) |
+| rx NET_RX s | 24.8 (62%) | 35.2 (88%) |
+| BQL bytes in flight a queue, of a 1 MiB limit | 134 to 530 KiB | 785 to 906 KiB |
+| an skb's driver transmit to consume, mean | 40 us | 109 us |
+| a queue's interrupt to its poll's end, median | 4 to 8 us | 4 to 8 us |
+| a transmit poll's completions, mean | 19 | 21 |
+| client's pause frames | 0 | 0 |
+
+- **With Y the work items' sends find the queues stopped by BQL**, and
+  half the reply bytes are sent from the queue's qdisc by the
+  completion CPU's NET_TX, which takes 8.7 s of its 40.
+- **The host handles completions promptly in both** (the interrupt to
+  the poll's end is the same), so the 109 us is spent between the
+  driver's transmit and the NIC's completion: a queue holds 850 KiB
+  while the port sends 8.4 GB/s a queue, half what one queue carried
+  for iperf (17.8 GB/s, t2-iperf-tx-2).  So with Y either the NIC
+  sends these skbs more slowly, or it reports them later, than iperf's.
+
+Next: the same BQL samples and skb transmit-to-consume under iperf3
+`-Z`, and the skbs' shape (bytes, frags, segment size) in both.
