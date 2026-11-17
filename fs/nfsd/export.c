@@ -2209,7 +2209,9 @@ gss:
  * its nfsd_thread_local_info slot, with its own reference on each, and a
  * request whose (net, auth_domain, fsid type, fsid) match and whose two
  * entries are still fresh borrows the export: no lookup and no refcount
- * write.  fh_put() returns the borrow.
+ * write.  fh_put() returns the borrow.  Each rtc pool rqst has a slot
+ * too, in its kzalloc'ed nfsd_thread_local_info; one call at a time owns
+ * it, so "owner" below is that call's work items.
  *
  * Slot protocol.  slot->lock guards ->borrowed and ->dead; nothing sleeps
  * or puts an entry under it.
@@ -2224,9 +2226,12 @@ gss:
  *  - Drain, under nfsd_exp_slots_mutex for the whole walk: per slot, lock;
  *    if ->borrowed, set ->dead; else move the pair and key out; unlock;
  *    put what moved out.  A drain never touches a borrowed slot's pair.
- *  - Thread exit unlinks the slot under nfsd_exp_slots_mutex, then puts
- *    the pair.
- * Lock order: nn->nfsd_mutex, nfsd_exp_slots_mutex, slot->lock.
+ *  - An nfsd thread's first borrow registers its slot on the drain list;
+ *    rtc pool rqst_init registers it before the rqst serves a call.
+ *  - Thread exit or pool rqst_free unlinks the slot under
+ *    nfsd_exp_slots_mutex, then puts the pair.
+ * Lock order: nn->nfsd_mutex or svc_rtc_mutex, nfsd_exp_slots_mutex,
+ * slot->lock.  Neither outer mutex is taken under nfsd_exp_slots_mutex.
  *
  * Freshness, checked on every borrow for both entries: CACHE_VALID set,
  * CACHE_NEGATIVE and CACHE_CLEANED clear (CACHE_CLEANED is set on every
@@ -2337,6 +2342,22 @@ void nfsd_exp_slot_init(struct nfsd_exp_slot *s)
 }
 
 /**
+ * nfsd_exp_slot_register - put an initialized slot on the drain list
+ * @s: the slot; its owner, which may sleep, is the only caller
+ *
+ * An nfsd thread's first borrow registers its slot; an rtc pool rqst's
+ * slot is registered when the rqst is made, so that no pool work item
+ * takes nfsd_exp_slots_mutex.
+ */
+void nfsd_exp_slot_register(struct nfsd_exp_slot *s)
+{
+	mutex_lock(&nfsd_exp_slots_mutex);
+	list_add(&s->link, &nfsd_exp_slots);
+	mutex_unlock(&nfsd_exp_slots_mutex);
+	s->registered = true;
+}
+
+/**
  * nfsd_exp_borrow - lend this nfsd thread's cached export to a file handle
  * @rqstp: the request
  * @net: network namespace of the request
@@ -2385,12 +2406,8 @@ struct svc_export *nfsd_exp_borrow(struct svc_rqst *rqstp, struct net *net,
 	    klen <= 0 || klen > sizeof(ntli->ntli_exp_slot.fsid))
 		goto skip;
 	s = &ntli->ntli_exp_slot;
-	if (unlikely(!s->registered)) {
-		mutex_lock(&nfsd_exp_slots_mutex);
-		list_add(&s->link, &nfsd_exp_slots);
-		mutex_unlock(&nfsd_exp_slots_mutex);
-		s->registered = true;
-	}
+	if (unlikely(!s->registered))
+		nfsd_exp_slot_register(s);
 
 	spin_lock(&s->lock);
 	if (s->borrowed) {
@@ -2480,11 +2497,12 @@ void nfsd_exp_slot_return(struct nfsd_exp_slot *s)
 }
 
 /**
- * nfsd_exp_slot_exit - drop an nfsd thread's slot as the thread exits
- * @s: the slot; no request is in flight on an exiting thread
+ * nfsd_exp_slot_exit - drop a slot as its nfsd thread or rtc pool rqst goes
+ * @s: the slot; no request is in flight on its owner
  *
- * The thread's nfsd() exits before nfsd_export_shutdown() purges its
- * net's caches, so no slot outlives them.
+ * The thread's nfsd() exits, and svc_rtc_unregister() frees the pool's
+ * rqsts, before nfsd_export_shutdown() purges the net's caches, so no
+ * slot outlives them.
  */
 void nfsd_exp_slot_exit(struct nfsd_exp_slot *s)
 {
