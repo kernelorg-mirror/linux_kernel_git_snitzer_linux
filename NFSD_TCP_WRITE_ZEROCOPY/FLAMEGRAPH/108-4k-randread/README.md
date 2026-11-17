@@ -94,3 +94,24 @@ O_DIRECT) give the six jobs a filesystem their files.
 
 Three at his iodepth 32, as he asks, then 16 and 64.  Runs are 20 s
 (his are 240), so they set against t2-r872 to r874 above.
+
+| Run, settled-iops.sh | in flight | M IOPS (a / b) | completion mean / p99 | server busy (busiest) | client busy (busiest) |
+|---|---|---|---|---|---|
+| t2-r875, iodepth 32 | 768 a port | 1.06 (0.52 / 0.53) | 1.46 / 4.15 ms | 48% (64%) | 94% (96%) |
+| t2-r876, iodepth 32 | 768 a port | 1.05 (0.52 / 0.53) | 1.46 / 4.23 ms | 49% (66%) | 95% (97%) |
+| t2-r877, iodepth 32 | 768 a port | 1.05 (0.52 / 0.53) | 1.46 / 4.18 ms | 48% (63%) | 94% (96%) |
+| t2-r878, iodepth 16 | 384 a port | 1.00 (0.50 / 0.50) | 0.76 / 2.11 ms | 43% (57%) | 84% (87%) |
+| t2-r879, iodepth 64 | 1536 a port | 0.94 (0.47 / 0.48) | 3.28 / 10.03 ms | 34% (58%) | 100% (100%) |
+
+- **At his iodepth 32: 1.05 M IOPS median, 1.05 minimum**, 7% over
+  the settled setting's 0.98 (t2-r873), and 29% of the 3.59 M he
+  measured.  The wire is not near: 1 M 4 KiB READs are about 35
+  Gbit/s on two 400 Gbit ports.
+- **The client is the limit**: 94 to 95% busy at depth 32 and 100% at
+  64, where the rate falls to 0.94.  The server is half idle, and the
+  one CPU near full in t2-r872 to r874 is gone: its busiest is 57 to
+  66% with the work over 128 connections.
+- Eight rpc_clnts in place of two did not lift the client: its cost
+  is each RPC's, which his patch 27 and the canary-WIP tip Mike is
+  building for the client are to answer.  Every run kept its files,
+  new kernel warnings 0; settled.sh's setting is back after.
