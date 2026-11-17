@@ -387,3 +387,32 @@ still full, so the work CPUs spin on it (488 to 507 cycles a KiB).
 That is to be seen in `rtc_stats` (runs against held back) before
 the bound is set anywhere.  The monitor's "possible stall" at
 07:04:43 was the rest before t2-r833 (no fio, no connection).
+
+**The hold-back churn, read from the code (17 November).**  Per READ
+(fio's 1 MiB reads are four 256 KiB READs, some 30 s of reads a run):
+t2-r832 held back about 2.3 times for each READ (16.55 M against
+some 7.2 M), t2-r833 about 2.9 (21.22 M against some 7.4 M).  The
+cause is TCP's write-space callback, not new calls.  A hold sets
+`SOCK_NOSPACE`, and `svc_tcp_has_wspace()` keeps the transport off
+the work item while the mark is set: a call arriving then
+(`svc_data_ready()`) enqueues nothing.  But each ACK that frees sent
+skbs while the mark is set runs `tcp_check_space()` →
+`svc_write_space()`, whose first act, `sk_stream_write_space()`, clears
+the mark by TCP's own measure (free space at least half of what is
+queued, against a send buffer grown to 4 MiB), far below which the
+bound (512 KiB or 1 MiB) sits.  The enqueue that follows finds write
+space, diverts, the work item runs, finds `sk_wmem_queued` still over
+the bound (the replies of calls taken before the hold keep landing),
+holds back and sets the mark again.  So it is one wasted pass of the
+work item (`queue_work_on()`, a run, the hold) for each ACK while the
+queue is over the bound, and none while it is under: the work CPUs'
+488 to 507 cycles a KiB.
+
+The fix proposed: the bound decides write space too.  For a connection
+with a work item and the bound set, `svc_tcp_has_wspace()` reports
+none while `sk_wmem_queued` is at or over the bound, setting
+`SOCK_NOSPACE` again (and reading the queue once more after, as
+`svc_rtc_send_full()` does) so that TCP keeps calling back.  An ACK
+that leaves the queue over the bound then costs that test in softirq
+and no pass.  To be counted on a bounded run: `svcsock_write_space`
+events against `send_full`, before and after.
