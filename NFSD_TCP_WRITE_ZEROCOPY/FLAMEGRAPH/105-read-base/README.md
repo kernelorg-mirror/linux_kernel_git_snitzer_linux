@@ -211,3 +211,39 @@ The suite, each through `xeu-rig/step.sh
 4. `rmmod-suite`; `kunit-off`; `params` (sunrpc's settings read back).
    nfsd is not started and `settled.sh` not applied until the client
    is cleared.
+
+### The suite took tardis2 down (17 November, 06:11:49)
+
+The steps up to `insmod-suite` (06:11:41) all exited 0.  Tests 1 to 40
+passed (`rtc_e2e_stop_full` took 4.6 s).  Test 41,
+`rtc_real_send_full_resumed`, the new case, failed its last check
+(`svc_rtc_kunit.c:2410`, `RTC_FB(a, b, i)` 1, not 0: one call of the
+130 fell back to the thread, its reason not printed).  Right after
+that came `Unable to handle kernel NULL pointer dereference at virtual
+address 0000000000000000`, an instruction abort (`ESR 0x86000007`,
+`EC 0x21`, level 3 translation fault): a call through a NULL function
+pointer.  KUnit never printed `not ok 41`, so it happened in the case's
+teardown (`rtc_real_free()`) or in a context running beside it.
+
+What survived: the journal on disk, which ends at `Internal error:
+Oops: 0000000086000007 [#1] SMP` (no registers, no `pc`, no call
+trace); netconsole on the client, which ends earlier, at `ok 39`; no
+dump.  kdump was armed (`kdumpctl` loaded at boot), `panic_on_oops` 1,
+`/var/crash` empty, and nothing shows the crash kernel ran.  The next
+boot's journal starts about 7 minutes later.  As on build 506, a crash
+here leaves no dump, and the cause is not known.
+
+One lead, in the fix itself: `svc_rtc_hold_recv()` clears
+`XPT_BUSY` and enqueues, and the pass then goes on to drain the sends
+on a transport it no longer owns (it still holds its xprt reference,
+from `svc_rtc_pin()`, so the conn is not freed under it).  An enqueue
+that finds write space can then hand the transport to the thread,
+which is one way the call falls back.  No cause of the NULL call has
+been found in the code.  The `svc_rtc_ops` hooks are all NULL-checked,
+and the socket callbacks are saved and restored as for nfsd.
+
+This boot (06:18) loaded the hold-fix `sunrpc.ko`
+(`6FB8AB5B48500088A19D991`) from `updates/`, where the swap left it;
+nfs-server is inactive, no `WARNING:`, `BUG:` or `Oops`.  The suite is
+not to be run again until its teardown is understood and the crash can
+be caught (`pc` and `lr` at least).
