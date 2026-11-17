@@ -2560,3 +2560,16 @@ lost reads (`region_reads` Y, t2-r665 and r667; the recycle, r782 to
 r810), and the zero-copy send with fresh pages did not (r809): why the
 NIC drains reused pages more slowly is the open question before any
 other way of keeping reply pages off the zone lock.
+
+**The SMMU is not it** (Mike: "run the SMMU check", 17 November):
+`/sys/kernel/iommu_groups/` is empty, no IOMMU is registered, and
+neither port (`0000:a1:00.0`, `0000:a4:00.0`) nor the drives
+(`0000:01:00.0`, `0000:41:00.0`) has an `iommu_group`; the kernel's
+"Default domain type: Translated, lazy" applies to nothing, and the
+64 MB software IO TLB holds nothing (`io_tlb_used` 0).  The NIC and the
+drives DMA to physical pages directly, so no mapping or IOTLB cost
+differs between a fresh page and a reused one.  What is left is the
+memory side: the IORT names the platform "XSIGHT E1.EVB", the NIC is
+the SoC's own, and a reused page's lines were written by a drive just
+before the NIC reads them through the SoC's fabric and system cache.
+Finding that would take the SoC's uncore counters; not pursued.
