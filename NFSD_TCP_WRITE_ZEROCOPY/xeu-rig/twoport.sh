@@ -457,14 +457,21 @@ for p in $PORTS; do job $p f $RUNTIME $WARM | clput /tmp/twoport-$p.fio; done
 # KEEP_FILES=1: a run that reads keeps its files for the next, and skips the
 # fill when every export holds the marker of a fill from the same fio job
 # files (Mike, 17 November: "the file read shouldn't be recreated").  A run
-# without it deletes the files and the markers.
+# that writes keeps them too when they are whole from such a fill (every
+# marker valid at its start): it overwrites the same files in place, at the
+# fill's sizes, so the read after it skips the fill (write-check.sh, then
+# read-check.sh).  A write that finds no valid marker, and any run without
+# KEEP_FILES, deletes the files and the markers after its load.
+for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' > fill-$p.fio; done
+FILLSUM=$(cat $(for p in $PORTS; do echo fill-$p.fio; done) | md5sum | cut -c1-32)
+filled=1
+for p in $PORTS; do for fs in ${FS[$p]}; do
+	[ "$(cat $fs/zcbudget/.twoport-filled 2>/dev/null)" = "$FILLSUM" ] || filled=0
+done; done
+if [ "$RW" = write ] && [ "${KEEP_FILES:-0}" = 1 ] && [ $filled = 1 ]; then
+	echo "files kept from the last fill, written in place: $(cl "du -sch /mnt/rxr-*/f-* | tail -1")" | tee -a geometry.txt
+fi
 if [ "$RW" != write ]; then	# a run that reads: every file written whole first, then a rest
-	for p in $PORTS; do job $p f 0 "" write | sed -e '/^time_based/d' -e '/^runtime=/d' -e '/^rwmixread=/d' -e 's/^bs=.*/bs=8M/' > fill-$p.fio; done
-	FILLSUM=$(cat $(for p in $PORTS; do echo fill-$p.fio; done) | md5sum | cut -c1-32)
-	filled=1
-	for p in $PORTS; do for fs in ${FS[$p]}; do
-		[ "$(cat $fs/zcbudget/.twoport-filled 2>/dev/null)" = "$FILLSUM" ] || filled=0
-	done; done
 	if [ "${KEEP_FILES:-0}" = 1 ] && [ $filled = 1 ]; then
 		echo "files kept from the last run: $(cl "du -sch /mnt/rxr-*/f-* | tail -1")" | tee -a geometry.txt
 	else
@@ -503,7 +510,7 @@ DRIVES="$(data_drives)" "$RIG/drvsample.py" drives-sec.tsv $(( WARM + RUNTIME + 
 "$RIG/wiresample.py" wire-sec.tsv $(( WARM + RUNTIME + 3 )) $(for p in $PORTS; do echo ${DEV[$p]}; done) &	# the same seconds, row for row
 cl "for i in \$(seq $(( WARM + RUNTIME + 5 ))); do echo \$(date +%s.%N) \$(awk '/^Tcp:/ && !h {for (i = 1; i <= NF; i++) if (\$i == \"RetransSegs\") c = i; h = 1; next} /^Tcp:/ {print \$c}' /proc/net/snmp); sleep 1; done" > client-sec.tsv 2>&1 &
 for p in $PORTS; do
-	if [ "${KEEP_FILES:-0}" = 1 ] && [ "$RW" != write ]; then
+	if [ "${KEEP_FILES:-0}" = 1 ] && { [ "$RW" != write ] || [ $filled = 1 ]; }; then
 		cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio" &
 	else
 		cl "fio --output-format=json --output=/tmp/twoport-$p.json /tmp/twoport-$p.fio; rm -f /mnt/rxr-$p[0-9]*/f-*" &

@@ -316,3 +316,13 @@ memory bytes a byte.**  New kernel warnings 0 in each.
   206).
 - t2-r853 on this stack against t2-r847 on the last: 71.42 and 70.07,
   so the rebuilt stack leaves the settled setting as it was.
+
+**`twoport.sh`: a write run keeps whole files.**  With `KEEP_FILES=1` a
+write run now reads the markers before its load, as a read run does,
+and keeps the files and markers when every one is valid: it overwrites
+the fill's files in place at their sizes, so the read check after a
+write check reads them with no fill.  A write that finds no valid
+marker still deletes the files and markers after its load, so a write
+that made its files never leaves them marked whole.  It shows in
+`geometry.txt` as "files kept from the last fill, written in place".
+To be seen at the next write and read checks.
