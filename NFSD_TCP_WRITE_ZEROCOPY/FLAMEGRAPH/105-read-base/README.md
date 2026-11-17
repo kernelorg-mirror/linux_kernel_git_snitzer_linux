@@ -143,3 +143,27 @@ receive back must release the transport (clear `XPT_BUSY` without
 enqueuing) and let the write-space callback's enqueue take it again,
 with a KUnit case for a held-back receive resumed by write space before
 it goes back on the rig.
+
+**The fix, `544300fa74a00`** "SUNRPC: Release the transport when a
+receive is held back": a receive held back clears `XPT_BUSY` and
+enqueues the transport again, as `svc_xprt_received()` does.  The
+enqueue does nothing while `SOCK_NOSPACE` is set; the write-space
+callback's enqueue takes the transport back once an ACK shrinks the
+queue.  (The host went down at 05:31 on 17 November, a second after
+that commit was first made: its object, the branch's ref and the index
+came back empty.  The commit before the amend, `f5c6c0bcd66f`, had the
+same change, and the branch was put back on it and amended again; what
+was moved aside is in `/var/tmp/git-crash-1117/`.)
+
+For 534: the tip's `net/sunrpc` no longer builds against 534's headers
+(`rx_loan_consumer_out()` and the rest), so the module is built from a
+worktree at `a7e5a1b76d046` (the `sunrpc-nosplit-534` source) with the
+placement fix, the bound and the fix cherry-picked
+(`/var/tmp/sunrpc-holdfix-534-tree`, `574ac2257ea5f`; with the fix
+taken off, its `svc_xprt.c` is `sunrpc-sendmax-534`'s byte for byte).
+`sunrpc.ko` `2144A0407A3CAD9D9C4112A` in
+`/var/tmp/zc-run-logs/sunrpc-holdfix-534/`: no warning but the
+compiler's version, 442 exports with no version changed.
+
+The KUnit case for a held-back receive resumed by write space is not
+written yet.
