@@ -395,3 +395,39 @@ new settled setting").  About to run: `prof.sh 860 settled` through
 `step.sh /var/tmp/zc-run-logs/r106-promise`, `settled` now being the
 1.5 MiB bound and round 105's base, to set beside t2-r841 (the old
 setting) and t2-r842 (the base at 512 KiB, before the count).
+
+**t2-r860, the profile at the new settled setting: 78.60 GB/s** under
+the profiler (t2-r841, the old setting's, 68.76), memory 78.3 GB/s,
+1.00 bytes a byte sent, the 32 connections one to a work CPU.  **The
+limit has moved to the client.**
+
+| | t2-r841, old setting | t2-r860, new setting |
+|---|---|---|
+| GB/s, profiled | 68.76 | 78.60 |
+| server work CPUs: lock release with interrupts (`_raw_spin_unlock_irqrestore`), self | 12.27% | 2.13% |
+| server work CPUs: contended lock wait (`queued_spin_lock_slowpath`), self | 5.28% | under 0.9% |
+| server work CPUs: idle, self | 1.83% | 10.82% |
+| server rings: idle, self | 16.93% | 25.98% |
+| client CPUs busy, mean of the two nodes | 75%, 70% | **84%, 83%** (busiest 95%) |
+| client cycles in `memcpy` (the READ data copied out of skbs) | 25.08% | **32.54%** |
+| client cycles idle (`cpu_idle_poll`) | 24.64% | 14.77% |
+| client sockets' Recv-Q, mean | 1.84 MB | 2.40 MB (a byte waits 0.98 ms) |
+| a READ at the client: queue / rtt / execute, ms | 0.34 / 5.05 / 5.47 | 0.88 / 3.48 / 4.54 |
+| drives | 58.7 GB/s, 6.0 in flight | 63.0 GB/s, 8.9 in flight |
+
+The server's lock contention is gone and its CPUs are mostly idle; the
+replies wait at the client, in its sockets' receive queues (a byte
+0.98 ms, against 0.17 ms in the server's Send-Q) and before its RPCs
+are sent (queue 0.88 ms).  A third of the client's cycles copy READ
+data out of skbs.  Against the frame: iperf3 alone received 98.31 GB/s
+on this client, copying too, so the client's NFS receive costs more a
+byte than iperf3's, and that is the next target.  The client is held
+untouched by the rules; what the server can do for it (fewer, larger
+segments, the client's interrupt CPUs, its RPCs' slots) is the next
+round's question, for Mike.
+
+A kernel warning in the run is the management port's driver, not the
+NFS path: `xemi_tx_poll ... exceeded budget in poll`
+(`net/core/netpoll.c:151`) as netconsole sent `step.sh`'s burst of
+summary lines out of `enaxsl1i0` (`xsl_emi`); the first this boot, the
+trace all netconsole and netpoll, the load unaffected.
