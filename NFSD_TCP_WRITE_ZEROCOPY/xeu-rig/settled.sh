@@ -529,6 +529,7 @@ declare -A CLI_SYSCTL=(
 	[net.core.rmem_max]=4194304
 	[net.core.wmem_max]=4194304
 	[net.ipv4.tcp_congestion_control]=cubic
+	[kernel.io_uring_disabled]=0
 	[net.core.netdev_max_backlog]=1000
 	[net.core.netdev_budget]=300
 	[net.core.netdev_budget_usecs]=2000
@@ -541,6 +542,20 @@ declare -A CLI_SYSCTL=(
 	[net.ipv4.tcp_ecn]=2
 )
 declare -A CLI_DEV=([a]=ens3np0 [b]=ens6np0)	# the client's end of each port
+# The client's kernel and what it brings, also read only (Mike, 17
+# November: "add the client audit"; FLAMEGRAPH round 109).  Build 541,
+# the canary-WIP tip, since 17 November (build 469 before): its rpciod
+# is per-CPU (David Flynn's ccaaf769083fe) and its WRITE pass reads 75
+# GB/s against 77.8 on 469 (WRITE.md).  twoport.sh holds xprtiod strict
+# (and leaves it so), and for a run sets the workqueue scope to numa and
+# stops irqbalance, putting both back after: at rest they read as below.
+# EXP_CLI_KERNEL holds a run to another client kernel.
+CLI_KERNEL=7.3.3-16.hs.541.canary.el9.x86_64
+CLI_CMDLINE="idle=poll processor.max_cstate=1 intel_idle.max_cstate=0 iommu=off selinux=0"
+declare -A CLI_MOD=([sunrpc/xprt_numa_map]=Y [nfs/nowait_writable]=N)
+declare -A CLI_WQ=([rpciod/per_cpu]=1 [xprtiod/per_cpu]=0 [xprtiod/affinity_strict]=1)
+CLI_MTU=9000
+CLI_WQ_SCOPE_REST=cache_shard
 SRV_QDISC=fq_codel	# under the mq of each server port; apply puts it back (round 07 tries pfifo_fast)
 GRO_MAX=65536	# each server port's gro_max_size and gro_ipv4_max_size (round 09 tries BIG TCP)
 gro_max() { ip -d link show $1 | grep -oE 'gro_(ipv4_)?max_size [0-9]+' | awk '{print $2}' | sort -u | paste -sd,; }
@@ -767,6 +782,33 @@ audit_client() {	# read only: nothing on the client is changed from here
 		want "client ${CLI_DEV[$p]} qdisc" "$(awk -v k=qdisc_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" "${!eq:-${EXP_QDISC:-fq_codel}}"
 		want "client ${CLI_DEV[$p]} pause rx/tx" "$(awk -v k=pause_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" off/off
 	done
+	# the kernel, its command line, workqueues and modules (CLI_KERNEL above)
+	out=$($SSHC "echo kernel \$(uname -r); echo cmdline \$(cat /proc/cmdline); \
+		for k in ${!CLI_WQ[*]}; do echo wq_\$k \$(cat /sys/devices/virtual/workqueue/\$k 2>/dev/null || echo absent); done; \
+		for k in ${!CLI_MOD[*]}; do echo mod_\$k \$(cat /sys/module/\${k%%/*}/parameters/\${k#*/} 2>/dev/null || echo unloaded); done; \
+		echo scope \$(cat /sys/module/workqueue/parameters/default_affinity_scope); echo irqbalance \$(systemctl is-active irqbalance); \
+		for d in ${CLI_DEV[*]}; do echo mtu_\$d \$(cat /sys/class/net/\$d/mtu); done" 2>/dev/null) ||
+		{ bad "client reachable at $CLIMGMT" no yes; return; }
+	want "client kernel" "$(awk '$1 == "kernel" {print $2}' <<< "$out")" "${EXP_CLI_KERNEL:-$CLI_KERNEL}"
+	local cl miss=; cl=$(awk '$1 == "cmdline" {$1 = ""; print}' <<< "$out")
+	for k in $CLI_CMDLINE; do [[ " $cl " == *" $k "* ]] || miss="$miss $k"; done
+	want "client kernel command line" "${miss:+missing$miss}${miss:-has $CLI_CMDLINE}" "has $CLI_CMDLINE"
+	for k in $(printf '%s\n' "${!CLI_WQ[@]}" | sort); do
+		want "client workqueue $k" "$(awk -v k=wq_$k '$1 == k {print $2}' <<< "$out")" "${CLI_WQ[$k]}"
+	done
+	for k in $(printf '%s\n' "${!CLI_MOD[@]}" | sort); do
+		local v; v=$(awk -v k=mod_$k '$1 == k {print $2}' <<< "$out")
+		if [ "$v" = unloaded ]; then printf '  --   %-34s %s\n' "client ${k%%/*}.${k#*/}" "module not loaded"; else want "client ${k%%/*}.${k#*/}" "$v" "${CLI_MOD[$k]}"; fi
+	done
+	for p in $PORTS; do
+		want "client ${CLI_DEV[$p]} MTU" "$(awk -v k=mtu_${CLI_DEV[$p]} '$1 == k {print $2}' <<< "$out")" "$CLI_MTU"
+	done
+	if [ "${mode:-}" = rest ]; then	# a run sets these, and puts them back after
+		want "client workqueue scope" "$(awk '$1 == "scope" {print $2}' <<< "$out")" "$CLI_WQ_SCOPE_REST"
+		want "client irqbalance" "$(awk '$1 == "irqbalance" {print $2}' <<< "$out")" active
+		# twoport.sh's SRV_ALIAS addresses, removed after each run
+		want "server alias addresses (SRV_ALIAS)" "$(for p in $PORTS; do ip -br -4 addr show dev ${PDEV[$p]}; done | grep -oE '192\.168\.[01]\.23[0-9]' | paste -sd ' ' | grep . || echo none)" none
+	fi
 }
 
 audit_netfilter() {
