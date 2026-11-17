@@ -2752,3 +2752,10 @@ The cap halved the queues' depth and an skb's wait, and moved memory
 rings): inside what one run of each can tell apart.  The client's
 mountstats show the paired connections again: the transports with 52k
 to 78k sends against 115k to 124k, 55 to 59 READs pending against 46.
+
+## What works, beside NFS (Mike, 17 November: "I need contrast with what works: the iperf and the fio runs that operate the drives at 104GB/s")
+
+[contrast.sh](contrast.sh): the drives read locally, iperf3 `-Z` out of
+both ports, and the two at once with no NFS between them, each with 5 s
+of cycles and the mesh's memory traffic.  About to run, through
+`step.sh`: `contrast.sh c1 fio`, `c2 iperf`, `c3 both`.
