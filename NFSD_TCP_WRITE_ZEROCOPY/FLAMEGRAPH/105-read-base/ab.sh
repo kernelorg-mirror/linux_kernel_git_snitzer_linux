@@ -4,7 +4,8 @@
 # base (svc_rtc_balance Y, RFS 32768, nconnect 16) with
 # net.ipv4.tcp_limit_output_bytes at <lob>, 5 s of the mesh's memory
 # traffic in its window, and sunrpc's svc_rtc_send_max at <send_max>
-# (0 when not given; put back to 0 after the last); then rate, memory bytes a byte sent, cycles a KiB
+# (0 when not given, held through client-read.sh's settled.sh apply as
+# EXP_RTC_SEND_MAX; settled.sh's again after the last); then rate, memory bytes a byte sent, cycles a KiB
 # (work CPUs, rings, all), and the server sockets' Send-Q, below-TCP bytes
 # and RTT.  Settled without the base after the last.
 H=$(cd "$(dirname "$0")" && pwd)
@@ -18,7 +19,7 @@ for pair in "$@"; do
 		for i in $(seq 1200); do [ -s $O/cli-ss.txt ] && break; sleep 0.5; done
 		perf stat -a -x, -e arm_cmn/hnf_mc_reqs/ -o $O/mem.txt -- sleep 5
 	) &
-	EXP_RTC_BALANCE=Y EXP_RFS=32768 NCONN=16 KEEP_FILES=1 EXP_TCP_LOB=$lob $H/../104-rx-cpus/client-read.sh $n > $O/ab.out 2>&1
+	EXP_RTC_BALANCE=Y EXP_RFS=32768 NCONN=16 KEEP_FILES=1 EXP_TCP_LOB=$lob EXP_RTC_SEND_MAX=$smax $H/../104-rx-cpus/client-read.sh $n > $O/ab.out 2>&1
 	wait
 	gb=$(grep -m1 '^total' $O/run.log | grep -oE '[0-9.]+')
 	mem=$(awk -F, '$3 ~ /hnf_mc_reqs/ {printf "%.1f", $1 * 64 / 5e9}' $O/mem.txt)
@@ -28,5 +29,4 @@ for pair in "$@"; do
 	sf=$(( $(awk '/^send_full /{print $2}' /sys/kernel/debug/nfsd/rtc_stats 2>/dev/null || echo 0) - $(awk '{print $2}' $O/sf0 2>/dev/null || echo 0) ))
 	echo "$(date +%T) t2-r$n lob $lob send_max $smax (receives left for later $sf): $gb GB/s, memory $mem GB/s ($(awk -v m=$mem -v g=$gb 'BEGIN {printf "%.2f", m / g}') a byte), cycles a KiB $cyc, below TCP $sk MB a socket, $srv| $(grep -oE "new kernel warnings [0-9]+" $O/ab.out | head -1)"
 done
-[ -w /sys/module/sunrpc/parameters/svc_rtc_send_max ] && echo 0 > /sys/module/sunrpc/parameters/svc_rtc_send_max
-(cd $H/../../xeu-rig && env -u EXP_RTC_BALANCE -u EXP_RFS -u NCONN -u EXP_TCP_LOB ./settled.sh apply > /var/tmp/zc-run-logs/r105/ab-settled.txt 2>&1; echo "settled again: $(tail -1 /var/tmp/zc-run-logs/r105/ab-settled.txt)")
+(cd $H/../../xeu-rig && env -u EXP_RTC_BALANCE -u EXP_RTC_SEND_MAX -u EXP_RFS -u NCONN -u EXP_TCP_LOB ./settled.sh apply > /var/tmp/zc-run-logs/r105/ab-settled.txt 2>&1; echo "settled again: $(tail -1 /var/tmp/zc-run-logs/r105/ab-settled.txt)")

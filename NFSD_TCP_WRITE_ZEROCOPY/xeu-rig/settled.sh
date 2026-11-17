@@ -377,6 +377,21 @@ RTC_CPUS_SETTLED=$RTC_CPUS
 RTC_BALANCE=N
 RTC_BALANCE_SETTLED=$RTC_BALANCE
 [ -n "${EXP_RTC_BALANCE:-}" ] && RTC_BALANCE=$EXP_RTC_BALANCE
+# sunrpc's svc_rtc_send_max, the bytes a connection's send queue may hold
+# before its rtc work item takes another call ("SUNRPC: Bound the replies
+# a run-to-completion connection holds", f379dad69c793): 512 KiB on
+# tardis2 since 17 November (Mike: "set the bound to 512K in settled.sh";
+# FLAMEGRAPH round 105, t2-r838: 64.47 GB/s against 59.57 at 0, 686
+# cycles a KiB against 745).  Only with the hold-back and write-space
+# fixes (544300fa74a00, 5562f5e440e7f, 6e2ea298a2dc3): without the first
+# every connection hangs at the bound, without the last the work items
+# spin on each ACK.  A sunrpc whose rtc_stats has no send_nospace lacks
+# the last, and audits BAD with the bound set.  0 elsewhere.
+# EXP_RTC_SEND_MAX holds a run (and apply) to other bytes, 0 for none.
+RTC_SEND_MAX=0
+[ $HOST = tardis2 ] && RTC_SEND_MAX=524288
+RTC_SEND_MAX_SETTLED=$RTC_SEND_MAX
+[ -n "${EXP_RTC_SEND_MAX:-}" ] && RTC_SEND_MAX=$EXP_RTC_SEND_MAX
 # Receive Flow Steering: off (no RPS on any queue, no flow table).
 # EXP_RFS=<flow table entries> holds a run (and apply) to RFS with every
 # receive queue's rps_cpus at nfsd's CPUs and an eighth of the entries
@@ -592,6 +607,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_RTC_READ:-}" ] && [ "$EXP_RTC_READ" != "$RTC_READ_SETTLED" ] && OFF="$OFF rtc_read=$EXP_RTC_READ"
 	[ "$RTC_CPUS" != "$RTC_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_cpus=${RTC_CPUS:-none}"
 	[ "$RTC_BALANCE" != "$RTC_BALANCE_SETTLED" ] && OFF="$OFF svc_rtc_balance=$RTC_BALANCE"
+	[ "$RTC_SEND_MAX" != "$RTC_SEND_MAX_SETTLED" ] && OFF="$OFF svc_rtc_send_max=$RTC_SEND_MAX"
 	[ "$RFS" != 0 ] && OFF="$OFF rfs=$RFS"
 	[ -n "$RPS_CPUS" ] && OFF="$OFF rps=$RPS_CPUS"
 	[ "$TX_DEFER" != 0 ] && OFF="$OFF skb_tx_defer_max=$TX_DEFER"
@@ -637,6 +653,14 @@ audit_nfsd() {
 		want "sunrpc svc_rtc_balance" "$(cat $SUNRPC/svc_rtc_balance)" "$RTC_BALANCE"
 	elif [ "$RTC_BALANCE" = Y ]; then
 		bad "sunrpc svc_rtc_balance" "not in this sunrpc" "a sunrpc with fe25e474fa3de"
+	fi
+	if [ -e $SUNRPC/svc_rtc_send_max ]; then
+		want "sunrpc svc_rtc_send_max" "$(cat $SUNRPC/svc_rtc_send_max)" "$RTC_SEND_MAX"
+		if [ "$RTC_SEND_MAX" != 0 ] && ! grep -q '^send_nospace ' /sys/kernel/debug/nfsd/rtc_stats 2>/dev/null; then
+			bad "sunrpc send bound's write space" "no send_nospace in rtc_stats" "a sunrpc with 6e2ea298a2dc3"
+		fi
+	elif [ "$RTC_SEND_MAX" != 0 ]; then
+		bad "sunrpc svc_rtc_send_max" "not in this sunrpc" "a sunrpc with f379dad69c793 and its fixes"
 	fi
 	for k in "${!NFSD_DBG_OPT[@]}"; do
 		if [ -e /sys/kernel/debug/nfsd/$k ]; then
@@ -997,6 +1021,7 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 		done
 		[ -w $SUNRPC/svc_rtc_cpus ] && [ "$(cat $SUNRPC/svc_rtc_cpus)" != "$RTC_CPUS" ] && echo "${RTC_CPUS:-}" > $SUNRPC/svc_rtc_cpus
 		[ -w $SUNRPC/svc_rtc_balance ] && [ "$(cat $SUNRPC/svc_rtc_balance)" != "$RTC_BALANCE" ] && echo $RTC_BALANCE > $SUNRPC/svc_rtc_balance
+		[ -w $SUNRPC/svc_rtc_send_max ] && [ "$(cat $SUNRPC/svc_rtc_send_max)" != "$RTC_SEND_MAX" ] && echo $RTC_SEND_MAX > $SUNRPC/svc_rtc_send_max
 		for k in "${!NFSD_DBG_OPT[@]}"; do
 			[ -e /sys/kernel/debug/nfsd/$k ] || continue
 			[ "$(cat /sys/kernel/debug/nfsd/$k)" = "${NFSD_DBG_OPT[$k]}" ] || echo "${NFSD_DBG_OPT[$k]}" > /sys/kernel/debug/nfsd/$k
