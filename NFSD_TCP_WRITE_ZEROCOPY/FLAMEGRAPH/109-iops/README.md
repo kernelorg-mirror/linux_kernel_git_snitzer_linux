@@ -133,3 +133,17 @@ and READ passes (AGENTS.md):
 
     cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 wpass ./write-check.sh 905
     ./step.sh /var/tmp/zc-run-logs/r109 rpass ./read-check.sh 906
+
+**The WRITE pass: RERUN twice, 74.85 (t2-r905) and 75.16 GB/s
+(t2-r907)**, against 77.73 to 77.91 on libaio before (round 107,
+t2-r868 to r871).  No drive stepped down, new kernel warnings 0, both
+ports even at about 37.5, the drives 9.2 to 9.5 GB/s each at 95 to 96%
+busy (9.7 to 9.8 at 98% before), all 32 server sockets carrying 41 to
+51 GB each (43 to 53 before), the client 39% busy (48% before).  Both
+passes are the first with the client on build 541; the server's only
+change is v3 only.  Mike, 17 November: "has to be client side
+difference.. I upgraded that client kernel".  So NFSv4 stays off, and
+the passes are not a regression of it; the WRITE mark on the build 541
+client is Mike's to decide.  The READ pass follows:
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 rpass ./read-check.sh 906
