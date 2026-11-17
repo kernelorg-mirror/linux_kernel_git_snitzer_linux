@@ -269,3 +269,13 @@ through `xeu-rig/step.sh /var/tmp/zc-run-logs/r106-promise NAME ...`:
 SUNRPC_KO=none swap-sunrpc.sh`, sunrpc `CFADF668BD58CB4A39A77E0`
 after), `settled`, `write-check.sh 848`, `read-check.sh 849`, then
 `ab.sh 850:1048576:16 851:524288:16 852:262144:16 853:settled`.
+
+The swap and `settled.sh apply` exited 0 (sunrpc `CFADF668…`, nfsd
+`603083CA…`, lockd `E80CADD7…`, the eight in `updates/`; both ports 3
+of 3).  `write-check.sh 848` then refused to start: root had 1.1 GB
+free, under its 1.5 GB.  Mike chose the build objects: the `.o`,
+`.cmd` and `.mod.c` of the twelve `/var/tmp/zc-run-logs/sunrpc-*-534`
+build directories were deleted (every `.ko`, source, symbol list and
+log kept), and root has 2.7 GB.  The 13 GB
+`/root/nvme0-backup-2026-10-17` and the 2.5 GB journal are left.
+The chain runs again as planned.
