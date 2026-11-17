@@ -379,17 +379,19 @@ RTC_BALANCE_SETTLED=$RTC_BALANCE
 [ -n "${EXP_RTC_BALANCE:-}" ] && RTC_BALANCE=$EXP_RTC_BALANCE
 # sunrpc's svc_rtc_send_max, the bytes a connection's send queue may hold
 # before its rtc work item takes another call ("SUNRPC: Bound the replies
-# a run-to-completion connection holds", f379dad69c793): 512 KiB on
-# tardis2 since 17 November (Mike: "set the bound to 512K in settled.sh";
-# FLAMEGRAPH round 105, t2-r838: 64.47 GB/s against 59.57 at 0, 686
-# cycles a KiB against 745).  Only with the hold-back and write-space
+# a run-to-completion connection holds", f379dad69c793): 0, the bound off.
+# It gains on FLAMEGRAPH round 105's base (t2-r838: 64.47 GB/s against
+# 59.57 at 0, 686 cycles a KiB against 745) but costs at this setting
+# (t2-r840, the READ pass at 512 KiB: 67.75 against t2-r835's 73.10), so
+# it stays 0 until the base is settled (Mike, 17 November: "its fine to
+# keep settled send bound back to 0"); pending-settled.sh carries it with
+# the base for round 106.  Only with the hold-back and write-space
 # fixes (544300fa74a00, 5562f5e440e7f, 6e2ea298a2dc3): without the first
 # every connection hangs at the bound, without the last the work items
 # spin on each ACK.  A sunrpc whose rtc_stats has no send_nospace lacks
 # the last, and audits BAD with the bound set.  0 elsewhere.
 # EXP_RTC_SEND_MAX holds a run (and apply) to other bytes, 0 for none.
 RTC_SEND_MAX=0
-[ $HOST = tardis2 ] && RTC_SEND_MAX=524288
 RTC_SEND_MAX_SETTLED=$RTC_SEND_MAX
 [ -n "${EXP_RTC_SEND_MAX:-}" ] && RTC_SEND_MAX=$EXP_RTC_SEND_MAX
 # Receive Flow Steering: off (no RPS on any queue, no flow table).

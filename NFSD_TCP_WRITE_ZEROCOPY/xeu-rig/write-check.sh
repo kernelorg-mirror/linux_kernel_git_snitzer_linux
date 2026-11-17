@@ -19,6 +19,11 @@
 # need 20 s idle to be back in their fast region, and 15 s of 78 GB/s
 # is about 150 GB a drive of the 625 they take at full rate.  WARM,
 # RUNTIME and REST override.
+#
+# It keeps its files (twoport.sh's KEEP_FILES, Mike, 17 November): it
+# writes the same files a read check fills, in place, so their markers
+# stay and the read check after it reads them with no fill.
+# KEEP_FILES=0 deletes them after.
 cd "$(dirname "$0")" || exit 1
 . ./common.sh
 n=${1:?write-check.sh <run number>}
@@ -32,7 +37,7 @@ ping -c1 -W2 192.168.1.106 > /dev/null && ping -c1 -W2 192.168.0.106 > /dev/null
 sync; for d in 0 1 2 3 4 5 6 7; do fstrim /hs/nvme$d; done; sleep ${REST:-30}
 dmesg > $O/dmesg.0
 env FS_A="/hs/nvme0 /hs/nvme1 /hs/nvme2 /hs/nvme3" FS_B="/hs/nvme4 /hs/nvme5 /hs/nvme6 /hs/nvme7" \
-	WARM=${WARM:-3} RUNTIME=${RUNTIME:-15} RW=write RWTSV=$O/rw.tsv TAG=write-check \
+	WARM=${WARM:-3} RUNTIME=${RUNTIME:-15} RW=write KEEP_FILES=${KEEP_FILES:-1} RWTSV=$O/rw.tsv TAG=write-check \
 	WRITES=$TWO_WRITES BUDGET_PAGES=8198 ./twoport.sh $O/run ab > $O/run.log 2>&1 ||
 	{ say "run failed: $(grep -E 'BAD|FAILED|no answer|not free' $O/run.log | head -3)"; exit 1; }
 dmesg > $O/dmesg.1
