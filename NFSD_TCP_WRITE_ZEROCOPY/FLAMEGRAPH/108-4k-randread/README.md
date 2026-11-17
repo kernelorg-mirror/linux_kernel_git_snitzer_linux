@@ -74,3 +74,23 @@ hold at any IODEPTH).  About to run through `xeu-rig/step.sh
   work on one CPU).  Every run kept its files, new kernel warnings 0.
 - Next: where a 4 KiB READ's time goes, a profile of both ends at
   iodepth 16.
+
+## David Flynn's IOPS setting (settled-iops.sh)
+
+Mike, 17 November: "run the NFS 4K runs with settled-iops.sh" (David
+Flynn's `nfsv3-max-iops-agent-instructions-20261117.md`, 3.59 M IOPS
+from one client on AWS).  `xeu-rig/settled-iops.sh` holds settled.sh
+with 768 nfsd threads and his 256 MiB socket buffers, and its `run`
+sets his load: each filesystem from its own server address
+(`SRV_ALIAS=1`, eight rpc_clnts at nconnect 16, 128 connections), 24
+jobs a port (one a client CPU) at iodepth 32.  The client is still
+build 469, without his patch 27 (the rpc_clnt shards, `7cc54f28c69fc`
+here); Mike is building the canary-WIP tip for it.  Two more 512 MiB
+files a drive (`f-<port>.4` and `.5`, copied from `.0` and `.1` with
+O_DIRECT) give the six jobs a filesystem their files.
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r108 iops ./settled-iops.sh run \
+        ../FLAMEGRAPH/108-4k-randread/nfs4k.sh 875:32 876:32 877:32 878:16 879:64
+
+Three at his iodepth 32, as he asks, then 16 and 64.  Runs are 20 s
+(his are 240), so they set against t2-r872 to r874 above.
