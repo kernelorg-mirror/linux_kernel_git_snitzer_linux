@@ -308,7 +308,8 @@ step:
    removed.
 2. kdump armed (`/sys/kernel/kexec_crash_loaded` 1), both ports pinged
    (`PORT-DEAD-AFTER-BOOT.md`), `/sys/module/sunrpc/srcversion` reads
-   `94F9970EBA48D601405AD7A` and `svc_rtc_send_max` 0.
+   `AF720978447140137AFC2FE` (the write-space fix, in `updates/` since
+   07:14 on 17 November) and `svc_rtc_send_max` 0.
 3. With no NFS mount on the client (check it): `bringup.sh` (crashlog and
    netconsole included), then `settled.sh apply` ending in "the
    settled setting".
@@ -472,3 +473,8 @@ the second fix's (63.08 against 62.88, 64.47 against 64.72), 8.2% over
 the bound at 0 at 512 KiB.  `send_nospace` is high (some 46 M in some
 30 s of reads, over 32 connections): every enqueue while over the
 bound, ACKs and arriving calls both, pays that one test.
+
+`updates/sunrpc.ko` is now the write-space fix's,
+`AF720978447140137AFC2FE` (the swap put it there): the next boot loads
+it, with the one-shot `ofp-rocky-534-pstore.conf` still set.  The
+bound stays 0 in `settled.sh` until Mike decides.
