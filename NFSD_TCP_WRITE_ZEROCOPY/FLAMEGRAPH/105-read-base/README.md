@@ -119,3 +119,27 @@ on top of the placement fix: `sunrpc.ko` `A00D335DAB7B990CCA5645B` in
 About to run, through `step.sh`: the module swapped in with no client
 connected, `settled.sh apply`, then `ab.sh 827:262144:0
 828:262144:1048576 829:262144:524288`.
+
+**t2-r827, admission off: 59.60 GB/s**, memory 2.28 bytes a byte, below
+TCP 0.30 MB a socket, Send-Q 3.52 MB, RTT 0.32 ms: the base as before.
+
+**t2-r828, admission at 1 MiB: every connection hung, and the host with
+it.**  Each of the 32 connections hit the bound once (`send_full` 32)
+and none ran again: their send queues drained to 0 while 2.3 MB of calls
+waited unread, `runs` did not move with the bound set back to 0, and the
+run hung in its load from 05:07.  The cause: a work item owns its
+transport (`XPT_BUSY`, taken in `svc_xprt_enqueue()` before
+`svc_rtc_divert()`) until its receive releases it.  `f379dad69c793`
+skipped the receive and so never released it, and with `XPT_BUSY` held
+every later `svc_xprt_enqueue()` (new data, write space, close) returns
+at its test-and-set.  `systemctl restart nfs-server` (05:23:57) then
+stuck in `svc_xprt_destroy_all()`: shutdown closes a transport by
+enqueuing it, which the same bit refuses, so `nfsdctl threads 0` sleeps
+in its retry loop, unkillable.  Only a reboot clears it.  The client's
+fio and 32 hard mounts wait on the server.
+
+`f379dad69c793` is not to run again as it is.  The fix: holding a
+receive back must release the transport (clear `XPT_BUSY` without
+enqueuing) and let the write-space callback's enqueue take it again,
+with a KUnit case for a held-back receive resumed by write space before
+it goes back on the rig.
