@@ -146,7 +146,8 @@ void			nfsd_exp_slots_drain(void);
 /* Per-CPU sums of the export borrow counters (debugfs export_borrow). */
 struct nfsd_exp_borrow_counts {
 	unsigned long	hit;		/* lent the slot's export */
-	unsigned long	fill;		/* missed, refilled the slot */
+	unsigned long	fill;		/* missed, filled an entry */
+	unsigned long	evict;		/* a fill that dropped a live entry */
 	unsigned long	skip;		/* ineligible or already borrowed */
 	unsigned long	drain;		/* slot drains */
 	unsigned long	bad_return;	/* return without a borrow (WARN) */
