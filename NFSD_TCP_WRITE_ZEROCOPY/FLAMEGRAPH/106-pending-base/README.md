@@ -215,3 +215,16 @@ and the A/B runs were not; against the settled setting unprofiled
 above it.  The settled row of the frame is taken again unprofiled in
 `ab.sh`'s shape: `t2-r847`, `client-read.sh` at the settled setting
 with the same memory counters.
+
+**t2-r847, the settled setting unprofiled in `ab.sh`'s shape: 70.07
+GB/s**, DMA 140.1, memory 97.1 GB/s, **1.39 bytes a byte**, cache
+fills 81.2, below TCP 0.13 MB and Send-Q 0.56 MB a socket of which
+**0.02 MB not sent**, 24 sockets, **4 MB waiting for the NIC** in all,
+cycles a KiB 351 / 199 / 550, new kernel warnings 0.  So the strobe
+reads about 70 at the settled setting, not 73 (that is `read-check.sh`'s
+shape, `WARM=10 RUNTIME=40` after a 120 s rest), and the profiler cost
+it about 1.3 GB/s, not 4.  On equal terms nconnect 12 on the pending
+base (t2-r846, 69.08) is 1.4% short of the settled setting, with nine
+times the bytes waiting for the NIC (36 MB against 4) and 0.43 more
+memory bytes a byte: it reaches the rate by spending the memory the
+settled setting saves.
