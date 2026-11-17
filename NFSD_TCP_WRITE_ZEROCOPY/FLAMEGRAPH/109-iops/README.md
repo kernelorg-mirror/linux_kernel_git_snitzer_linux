@@ -176,3 +176,37 @@ Mike: "profile the hot CPU".  `prof-hot.sh` at the best of section 3,
 iodepth 64 and nconnect 12:
 
     cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 hot ../FLAMEGRAPH/109-iops/prof-hot.sh 908 64 12
+
+t2-r908: 2.31 M IOPS (1.16 / 1.16), 1.32 / 3.98 ms, server 70% busy
+(busiest 93%), client 77%, new kernel warnings 0.
+
+- **No one CPU is hot: nfsd's 48 work CPUs are 86.7% busy on average
+  (82 to 93%), two rtc connections on each** (`placed` read 2 on every
+  CPU at both ends of the window).  The busiest (48, 92.6%) and the
+  median (21, 86.6%) look alike: 92% of the busiest under
+  `svc_rtc_work`, the rest idle and softirq.
+- **The per-request checks are about 10% of each:** `module_put` 2.5%
+  and `try_module_get` 2.0% (the export's and the auth domain's module
+  references), `svcauth_unix_set_client` 2.2%, `sunrpc_cache_find_rcu`
+  1.8%, `refcount_dec_not_one` 1.4%, beside `_raw_spin_lock` 3.4%.
+  That is what David's 18 and 19 (borrowing the export) take away.
+- nfsdcld and systemd-journald took no samples.  About a fifth of each
+  CPU's samples carry the command `kthreadd`, under the same
+  `kthread` and `worker_thread` chain as the kworkers' (96% of the
+  CPU's samples are under `kthread`): the rtc kworkers' samples under
+  another name, not other work.
+- So the server is near its limit across its work CPUs at 2.31 M, and
+  the next server step is the per-READ cost, not the spread.
+
+## 5. The client's workqueue scope: cache_shard against numa
+
+Every run so far had the client's workqueue `default_affinity_scope`
+at numa (`twoport.sh`'s `CLI_SCOPE`, since 7 November), not build 541's
+own cache_shard: xprtiod, still unbound, has one pool a node at numa
+and one a cache shard at cache_shard, and its pool lock was most of
+the client's 13.4% in spin locks (t2-r887).  Mike, 17 November: "run
+the cache_shard A/B".  Three runs a side in turns at iodepth 64 and
+nconnect 12, under one settled-iops.sh run:
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r109 scope ./settled-iops.sh run \
+        ../FLAMEGRAPH/109-iops/ab-scope.sh 909:cache_shard 910:numa 911:cache_shard 912:numa 913:cache_shard 914:numa
