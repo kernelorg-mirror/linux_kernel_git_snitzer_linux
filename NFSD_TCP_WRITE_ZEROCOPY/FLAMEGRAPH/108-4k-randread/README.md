@@ -115,3 +115,14 @@ Three at his iodepth 32, as he asks, then 16 and 64.  Runs are 20 s
   is each RPC's, which his patch 27 and the canary-WIP tip Mike is
   building for the client are to answer.  Every run kept its files,
   new kernel warnings 0; settled.sh's setting is back after.
+
+## The profile of both ends at iodepth 32
+
+Mike, 17 November: "profile both ends at iodepth 32 while I build the
+client kernel".  `prof4k.sh` is one nfs4k.sh run under settled-iops.sh
+with 8 s of `perf record -a -g` at 999 Hz on both ends at once from
+the load's second 8, and the client's cycles and instructions a
+socket:
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r108 prof4k \
+        ../FLAMEGRAPH/108-4k-randread/prof4k.sh 880
