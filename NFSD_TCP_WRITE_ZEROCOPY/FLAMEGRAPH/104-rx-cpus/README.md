@@ -2791,3 +2791,16 @@ except where two connections share one.
 
 About to run (Mike: "run the both-at-once test with fio capped at 50
 GB/s"): `FIORATE=6250000000 contrast.sh c4 both`, 6.25 GB/s a drive.
+
+**`contrast-c4`, both at once with the drives capped at 50 GB/s: drives
+50.00, wire 94.01, 144 GB/s of DMA at 119.8 GB/s of memory** (cache
+fills 57.9; 338 cycles a KiB of the wire's; the client 55% busy).  So
+c3's 116 GB/s was not a ceiling on the devices' DMA: fio, uncapped,
+took the memory first and iperf got 39.  What the two mixed runs share
+is the memory traffic, 119.8 and 123.1 GB/s, against 148 one way.  c4's
+wire lost only 4% of its 98 alone, so whether 120 is memory's mixed
+ceiling or c4 simply did not ask for more is not settled by it.
+iperf3 `-Z`'s pages are partly cache-resident (it sends the same buffer
+again), so its DMA and its memory traffic are not one to one either.
+NFS at N (t2-r815) sits at 116.5 GB/s of memory for 146 of DMA, in the
+same place as c4.
