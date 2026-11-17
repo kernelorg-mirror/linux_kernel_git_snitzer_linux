@@ -146,3 +146,17 @@ FIXEDBUFS=1 ./read-check.sh 867` through `step.sh
 /var/tmp/zc-run-logs/r107 rcuring`, at the settled setting, the pass's
 own shape (`WARM=10 RUNTIME=40`, a trim and 120 s of rest), set beside
 t2-r859's 79.24 on libaio.
+
+**t2-r867, the READ pass on io_uring with registered buffers: PASS,
+80.39 GB/s**, new kernel warnings 0, port a 40.33 and port b 40.05 (no
+FIFO or ring drops), the kept files read with no fill.  The best READ
+pass on the rig, against t2-r859's 79.24 on libaio.
+
+Its drives read 10.0 to 10.2 GB/s each, the busiest 100% busy: all of
+the 80 came from the drives.  t2-r859's drives read 5.5 each at 55%
+busy, about 44 of its 79 GB/s, because it ran straight after the write
+check had written the same 17 GB in place, and the rest most likely
+came from the server's page cache.  So t2-r859's 79.24 is helped by
+the write before it, and t2-r867's 80.39 is the cleaner figure.  At 10
+GB/s each the drives are under the 13 each local fio reached (104.58
+on the eight, round 104), but fully busy.
