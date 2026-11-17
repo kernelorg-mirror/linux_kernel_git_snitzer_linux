@@ -2759,3 +2759,32 @@ to 78k sends against 115k to 124k, 55 to 59 READs pending against 46.
 both ports, and the two at once with no NFS between them, each with 5 s
 of cycles and the mesh's memory traffic.  About to run, through
 `step.sh`: `contrast.sh c1 fio`, `c2 iperf`, `c3 both`.
+
+| run | drives GB/s | wire GB/s | devices' DMA, GB/s | memory GB/s | cache fills | cycles a KiB |
+|---|---|---|---|---|---|---|
+| `contrast-c1`, fio alone | 104.58 | 0 | 104.6 | 103.9 | 106.3 | 71 |
+| `contrast-c2`, iperf3 `-Z` alone | 0 | 98.31 | 98.3 | 97.6 | 7.0 | 283 |
+| `contrast-c3`, both at once | 77.34 | 38.80 | 116.1 | 123.1 | 81.0 | 317 (of the drives') |
+| `t2-r815`, NFS READ at N | 73.02 | 73.02 | 146.0 | 116.5 | 85.3 | 589 |
+
+**Alone each device runs at its own ceiling; together they share about
+120 GB/s.**  With the drives writing memory and the NIC reading it at
+once (c3), the two together moved 116 GB/s, 123 GB/s of memory traffic,
+and neither reached its own rate.  Memory reads 148 GB/s one way and
+writes 148 (round 98's `membw.c`); mixed DMA in both directions carries
+about 120 to 125.
+
+**NFS already moves more than that, because the cache serves the NIC.**
+At 73 GB/s an NFS READ is 146 GB/s of DMA (the drive's write, the NIC's
+read of the same bytes) for 116.5 GB/s of memory traffic: about 30 GB/s
+of the NIC's reads come out of the system cache, where the drive just
+wrote them.  iperf and fio in c3 read and write different pages, so
+they get none of that.
+
+So for 80 GB/s (160 GB/s of DMA) inside about 123 GB/s of memory, at
+least 37 GB/s of the NIC's reads must come from the cache: memory bytes
+a byte sent at 1.54 or less, where N runs at 1.56 to 1.60 (r815,
+r817).  The lever is the share of a reply the NIC reads while it is
+still in the cache.  NFS's cycles (589 a KiB against 354 for the two
+devices' own work) are not what holds it: its CPUs are not saturated
+except where two connections share one.
