@@ -79,6 +79,7 @@ struct ebt {
 	struct auth_domain	*dom[2];
 	struct svc_rqst		*rqstp;
 	struct nfsd_thread_local_info *ntli;
+	struct svc_rqst		*rtc;		/* a pool rqst, freed at exit */
 	struct svc_xprt		xprt;
 	u32			fsid;
 
@@ -346,6 +347,11 @@ static void ebt_exit(struct kunit *test)
 		return;
 	/* fh_verify() installed nfsd creds on this task */
 	put_cred(revert_creds(get_cred(current_real_cred())));
+	if (t->rtc) {
+		/* a test may have freed it already; a second free is a no-op */
+		nfsd3_rtc_ops.rqst_free(t->rtc);
+		put_group_info(t->rtc->rq_cred.cr_group_info);
+	}
 	if (t->ntli) {
 		nfsd_exp_slot_exit(&t->ntli->ntli_exp_slot);
 		put_cred(t->ntli->ntli_user_cred);
@@ -428,6 +434,42 @@ static struct svc_export *ebt_borrow(struct ebt *t,
 				     struct nfsd_exp_slot **slotp)
 {
 	return ebt_borrow_in(t, 0, FSID_NUM, &t->fsid, slotp);
+}
+
+/*
+ * A pool rqst from nfsd3_rtc_ops.rqst_init(), given what svc_rtc's call
+ * set-up gives an NFSv3 AUTH_SYS call; ebt_exit() frees it.
+ */
+static struct svc_rqst *ebt_rtc_new(struct ebt *t)
+{
+	struct kunit *test = t->test;
+	struct svc_rqst *r = kunit_kzalloc(test, sizeof(*r), GFP_KERNEL);
+
+	KUNIT_ASSERT_NOT_NULL(test, r);
+	KUNIT_ASSERT_EQ(test, nfsd3_rtc_ops.rqst_init(r), 0);
+	t->rtc = r;
+	r->rq_prog = NFS_PROGRAM;
+	r->rq_vers = 3;
+	r->rq_client = t->dom[0];
+	r->rq_cred.cr_flavor = RPC_AUTH_UNIX;
+	r->rq_cred.cr_group_info =
+		get_group_info(t->rqstp->rq_cred.cr_group_info);
+	r->rq_chandle.defer = ebt_defer;
+	r->rq_chandle.thread_wait = 0;
+	r->rq_xprt = &t->xprt;
+	return r;
+}
+
+static struct nfsd_exp_slot *ebt_rtc_slot(struct svc_rqst *r)
+{
+	return &((struct nfsd_thread_local_info *)r->rq_private)->ntli_exp_slot;
+}
+
+static struct svc_export *ebt_rtc_borrow(struct ebt *t, struct svc_rqst *r,
+					 struct nfsd_exp_slot **slotp)
+{
+	return nfsd_exp_borrow(r, t->n[0].net, r->rq_client, r->rq_gssclient,
+			       FSID_NUM, &t->fsid, slotp);
 }
 
 struct ebt_delta {
@@ -1025,35 +1067,50 @@ static void ebt_nested_fh_verify(struct kunit *test)
 	EBT_EXPECT_DELTA(test, &d, bad_return, 0);
 }
 
-/* 21: a run-to-completion pool rqst never borrows or registers a slot. */
+/*
+ * 21: a run-to-completion pool rqst has an enabled slot, registered with
+ * no borrow out; a fill, then a hit, and no refcount moves across borrow
+ * and return.
+ */
 static void ebt_rtc_rqst(struct kunit *test)
 {
 	struct ebt *t = test->priv;
-	struct nfsd_thread_local_info *ntli;
-	struct nfsd_exp_slot *slot;
+	struct nfsd_exp_slot *s, *slot;
+	struct svc_export *exp;
+	unsigned int rek, rexp;
 	struct svc_rqst *r;
 	struct ebt_delta d;
 
 	ebt_install(t);
-	r = kunit_kzalloc(test, sizeof(*r), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_NULL(test, r);
-	KUNIT_ASSERT_EQ(test, nfsd3_rtc_ops.rqst_init(r), 0);
-	r->rq_prog = NFS_PROGRAM;
-	r->rq_vers = 3;
-	r->rq_client = t->dom[0];
-	r->rq_cred.cr_flavor = RPC_AUTH_UNIX;
-	r->rq_chandle.defer = ebt_defer;
-	ntli = r->rq_private;
+	r = ebt_rtc_new(t);
+	s = ebt_rtc_slot(r);
+	KUNIT_EXPECT_TRUE(test, s->enabled);
+	KUNIT_EXPECT_TRUE(test, s->registered);
+	KUNIT_EXPECT_FALSE(test, s->borrowed);
+
 	ebt_mark(&d);
-	KUNIT_EXPECT_NULL(test, nfsd_exp_borrow(r, t->n[0].net, t->dom[0], NULL,
-						FSID_NUM, &t->fsid, &slot));
-	KUNIT_EXPECT_NULL(test, slot);
-	EBT_EXPECT_DELTA(test, &d, skip, 1);
+	exp = ebt_rtc_borrow(t, r, &slot);
+	KUNIT_ASSERT_PTR_EQ(test, exp, t->exp);
+	KUNIT_ASSERT_PTR_EQ(test, slot, s);
+	EBT_EXPECT_DELTA(test, &d, fill, 1);
+	nfsd_exp_slot_return(slot);
+	rek = ebt_ref(&t->ek->h);
+	rexp = ebt_ref(&t->exp->h);
+
+	ebt_mark(&d);
+	exp = ebt_rtc_borrow(t, r, &slot);
+	KUNIT_ASSERT_PTR_EQ(test, exp, t->exp);
+	KUNIT_ASSERT_PTR_EQ(test, slot, s);
+	KUNIT_EXPECT_TRUE(test, s->borrowed);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), rek);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), rexp);
+	nfsd_exp_slot_return(slot);
+	KUNIT_EXPECT_FALSE(test, s->borrowed);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), rek);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), rexp);
+	EBT_EXPECT_DELTA(test, &d, hit, 1);
 	EBT_EXPECT_DELTA(test, &d, fill, 0);
-	KUNIT_EXPECT_FALSE(test, ntli->ntli_exp_slot.enabled);
-	KUNIT_EXPECT_FALSE(test, ntli->ntli_exp_slot.registered);
-	KUNIT_EXPECT_FALSE(test, ntli->ntli_exp_slot.borrowed);
-	nfsd3_rtc_ops.rqst_free(r);
+	EBT_EXPECT_DELTA(test, &d, skip, 0);
 
 	/* a request that is not NFSv3 is not counted as a skip */
 	t->rqstp->rq_vers = 4;
@@ -1262,6 +1319,118 @@ static void ebt_decode_failure(struct kunit *test)
 	EBT_EXPECT_DELTA(test, &d, bad_return, 0);
 }
 
+/*
+ * 28: rqst_free on an idle, filled pool rqst drops both references and
+ * unlinks the slot: a later drain touches nothing.
+ */
+static void ebt_rtc_free_idle(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct nfsd_exp_slot *slot;
+	unsigned int bek, bexp;
+	struct svc_rqst *r;
+	struct ebt_delta d;
+
+	ebt_install(t);
+	bek = ebt_ref(&t->ek->h);
+	bexp = ebt_ref(&t->exp->h);
+	r = ebt_rtc_new(t);
+	KUNIT_ASSERT_PTR_EQ(test, ebt_rtc_borrow(t, r, &slot), t->exp);
+	nfsd_exp_slot_return(slot);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek + 1);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp + 1);
+
+	nfsd3_rtc_ops.rqst_free(r);
+	KUNIT_EXPECT_NULL(test, r->rq_private);
+	/* a slot left linked would leave the drain list on freed memory */
+	KUNIT_ASSERT_EQ(test, ebt_ref(&t->ek->h), bek);
+	KUNIT_ASSERT_EQ(test, ebt_ref(&t->exp->h), bexp);
+	ebt_mark(&d);
+	nfsd_exp_slots_drain();
+	EBT_EXPECT_DELTA(test, &d, drain, 1);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp);
+}
+
+/*
+ * 29: a drain while a pool rqst's borrow is out (fh_verify() at WRITE
+ * submit, fh_put() from pc_release at completion) marks the slot dead and
+ * leaves the pair; the fh_put() drops it and clears both flags.
+ */
+static void ebt_rtc_drain_borrowed(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct nfsd_exp_slot *s, *slot;
+	unsigned int bek, bexp;
+	struct svc_rqst *r;
+	struct ebt_delta d;
+	struct svc_fh fh;
+
+	ebt_install(t);
+	bek = ebt_ref(&t->ek->h);
+	bexp = ebt_ref(&t->exp->h);
+	r = ebt_rtc_new(t);
+	s = ebt_rtc_slot(r);
+	KUNIT_ASSERT_PTR_EQ(test, ebt_rtc_borrow(t, r, &slot), t->exp);
+	nfsd_exp_slot_return(slot);
+
+	ebt_fh(t, &fh, FILEID_ROOT);
+	ebt_mark(&d);
+	KUNIT_ASSERT_EQ(test, fh_verify(r, &fh, 0, NFSD_MAY_NOP), nfs_ok);
+	KUNIT_EXPECT_PTR_EQ(test, fh.fh_exp_slot, s);
+	KUNIT_EXPECT_PTR_EQ(test, fh.fh_export, t->exp);
+	EBT_EXPECT_DELTA(test, &d, hit, 1);
+	nfsd_exp_slots_drain();
+	KUNIT_EXPECT_TRUE(test, s->borrowed);
+	KUNIT_EXPECT_TRUE(test, s->dead);
+	KUNIT_EXPECT_PTR_EQ(test, s->exp, t->exp);
+	KUNIT_EXPECT_PTR_EQ(test, s->ek, t->ek);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek + 1);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp + 1);
+	fh_put(&fh);
+	KUNIT_EXPECT_FALSE(test, s->borrowed);
+	KUNIT_EXPECT_FALSE(test, s->dead);
+	KUNIT_EXPECT_NULL(test, s->exp);
+	KUNIT_EXPECT_NULL(test, s->ek);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp);
+	EBT_EXPECT_DELTA(test, &d, bad_return, 0);
+}
+
+/*
+ * 30: a pool rqst's slot is on the drain list before its first borrow, so
+ * the borrow never registers it (no nfsd_exp_slots_mutex in a pool work
+ * item); the fill and the hit count no skip.
+ */
+static void ebt_rtc_registered_eagerly(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct nfsd_exp_slot *s, *slot;
+	struct svc_rqst *r;
+	struct ebt_delta d;
+
+	ebt_install(t);
+	r = ebt_rtc_new(t);
+	s = ebt_rtc_slot(r);
+	KUNIT_EXPECT_TRUE(test, s->registered);
+	KUNIT_EXPECT_FALSE(test, list_empty(&s->link));
+	/* a drain visits it already: it marks a borrowed slot dead */
+	s->borrowed = true;
+	nfsd_exp_slots_drain();
+	KUNIT_EXPECT_TRUE(test, s->dead);
+	s->borrowed = false;
+	s->dead = false;
+
+	ebt_mark(&d);
+	KUNIT_ASSERT_PTR_EQ(test, ebt_rtc_borrow(t, r, &slot), t->exp);
+	nfsd_exp_slot_return(slot);
+	KUNIT_ASSERT_PTR_EQ(test, ebt_rtc_borrow(t, r, &slot), t->exp);
+	nfsd_exp_slot_return(slot);
+	EBT_EXPECT_DELTA(test, &d, fill, 1);
+	EBT_EXPECT_DELTA(test, &d, hit, 1);
+	EBT_EXPECT_DELTA(test, &d, skip, 0);
+}
+
 static struct kunit_case nfsd_export_borrow_cases[] = {
 	KUNIT_CASE(ebt_hit_no_refcount),
 	KUNIT_CASE(ebt_export_replaced),
@@ -1290,6 +1459,9 @@ static struct kunit_case nfsd_export_borrow_cases[] = {
 	KUNIT_CASE(ebt_drain_during_refill),
 	KUNIT_CASE(ebt_key_change),
 	KUNIT_CASE(ebt_decode_failure),
+	KUNIT_CASE(ebt_rtc_free_idle),
+	KUNIT_CASE(ebt_rtc_drain_borrowed),
+	KUNIT_CASE(ebt_rtc_registered_eagerly),
 	{}
 };
 
