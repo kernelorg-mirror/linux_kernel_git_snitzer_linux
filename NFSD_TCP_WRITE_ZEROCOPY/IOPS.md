@@ -214,8 +214,8 @@ When the client is up on the canary-WIP tip, in this order:
 3. The A/Bs of "Next", step 3, one at a time.  The round's README
    records each, and the client's kernel beside every result.
 
-Not changed and still open: the claude.ai artifact (round 106's story)
-has nothing of rounds 107's WRITE A/B or 108; the client's 2.17 bytes
-of memory a byte on WRITEs (round 107) is unexplained; the EFI
-partition's FAT dirty bit (nvme8n1p1) waits for a `fsck.fat` at the
-next maintenance.
+Still open: the client's 2.17 bytes of memory a byte on WRITEs (round
+107) is unexplained; the EFI partition's FAT dirty bit (nvme8n1p1)
+waits for a `fsck.fat` at the next maintenance.  The claude.ai artifact
+"NFSD Read Promised Count" is round 106's READ story and is not used
+for IOPS (Mike, 17 November): IOPS progress is not offered for it.
