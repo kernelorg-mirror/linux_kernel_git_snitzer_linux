@@ -1646,10 +1646,11 @@ EXPORT_SYMBOL_IF_KUNIT(svc_rtc_kunit_send_full);
  * work item owns the transport (XPT_BUSY, taken by svc_xprt_enqueue()
  * before it diverted here) until a receive releases it; a receive held
  * back must release it too, or no enqueue (new data, write space, close)
- * reaches the transport again.  The enqueue after the release finds no
- * write space (svc_rtc_send_full() set SOCK_NOSPACE) and does nothing, unless
- * an ACK cleared the mark in the meantime, whose write-space enqueue found
- * the transport still busy: then it takes the transport back here.
+ * reaches the transport again.  The pass releases it last, after its
+ * sends.  The enqueue after the release finds no write space
+ * (svc_rtc_send_full() set SOCK_NOSPACE) and does nothing, unless an ACK
+ * cleared the mark in the meantime, whose write-space enqueue found the
+ * transport still busy: then it takes the transport back here.
  */
 static void svc_rtc_hold_recv(struct svc_xprt *xprt)
 {
@@ -1976,6 +1977,7 @@ static void svc_rtc_work(struct work_struct *work)
 						 work);
 	struct svc_xprt *xprt = conn->xprt;
 	enum svc_rtc_reason reason;
+	bool hold = false;
 	bool dead;
 
 	svc_rtc_stat_inc(runs);
@@ -1983,7 +1985,7 @@ static void svc_rtc_work(struct work_struct *work)
 
 	if (test_and_clear_bit(SVC_RTC_RECV, &conn->flags)) {
 		if (svc_rtc_send_full(conn)) {
-			svc_rtc_hold_recv(xprt);
+			hold = true;
 			goto sends;
 		}
 		switch (svc_rtc_recv_step(xprt, &reason, NULL)) {
@@ -2016,6 +2018,9 @@ sends:
 		svc_rtc_stat_inc(budget_exhausted);
 		svc_rtc_kick(conn);
 	}
+	/* Last: once released, the transport can be another's. */
+	if (hold)
+		svc_rtc_hold_recv(xprt);
 	svc_rtc_run_done(xprt);
 }
 
