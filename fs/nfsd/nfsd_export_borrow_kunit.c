@@ -102,6 +102,19 @@ static struct ebt *ebt_cur;
 
 #define EBT_SLOT(t)	(&(t)->ntli->ntli_exp_slot)
 
+/* The entry the slot used last; its first when every entry is empty. */
+static struct nfsd_exp_slot_ent *ebt_ent(struct nfsd_exp_slot *s)
+{
+	struct nfsd_exp_slot_ent *e = &s->ent[0];
+	unsigned int i;
+
+	for (i = 1; i < s->nr; i++)
+		if (s->ent[i].used > e->used)
+			e = &s->ent[i];
+	return e;
+}
+#define EBT_ENT(t)	ebt_ent(EBT_SLOT(t))
+
 static unsigned int ebt_ref(struct cache_head *h)
 {
 	return kref_read(&h->ref);
@@ -503,7 +516,7 @@ static struct svc_export *ebt_miss_in(struct ebt *t, int ni, int type,
 	KUNIT_ASSERT_PTR_EQ(test, slot, EBT_SLOT(t));
 	EBT_EXPECT_DELTA(test, &d, hit, 0);
 	EBT_EXPECT_DELTA(test, &d, fill, 1);
-	KUNIT_EXPECT_PTR_EQ(test, EBT_SLOT(t)->exp, exp);
+	KUNIT_EXPECT_PTR_EQ(test, EBT_ENT(t)->exp, exp);
 	nfsd_exp_slot_return(slot);
 	return exp;
 }
@@ -535,12 +548,16 @@ static void ebt_expect_idle_empty(struct kunit *test, struct ebt *t)
 {
 	struct nfsd_exp_slot *s = EBT_SLOT(t);
 
+	unsigned int i;
+
 	KUNIT_EXPECT_FALSE(test, s->borrowed);
 	KUNIT_EXPECT_FALSE(test, s->dead);
-	KUNIT_EXPECT_NULL(test, s->exp);
-	KUNIT_EXPECT_NULL(test, s->ek);
-	KUNIT_EXPECT_NULL(test, s->client);
-	KUNIT_EXPECT_NULL(test, s->net);
+	for (i = 0; i < s->nr; i++) {
+		KUNIT_EXPECT_NULL(test, s->ent[i].exp);
+		KUNIT_EXPECT_NULL(test, s->ent[i].ek);
+		KUNIT_EXPECT_NULL(test, s->ent[i].client);
+		KUNIT_EXPECT_NULL(test, s->ent[i].net);
+	}
 }
 
 /* An NFSv3-sized handle for net 0's export: fsid type FSID_NUM. */
@@ -620,7 +637,7 @@ static void ebt_expkey_replaced(struct kunit *test)
 	ekb = ebt_set_ek(t, 0, t->dom[0], FSID_NUM, &t->fsid, &t->path[1]);
 	KUNIT_ASSERT_PTR_NE(test, ekb, t->ek);
 	KUNIT_EXPECT_PTR_EQ(test, ebt_miss(t), expb);
-	KUNIT_EXPECT_PTR_EQ(test, EBT_SLOT(t)->ek, ekb);
+	KUNIT_EXPECT_PTR_EQ(test, EBT_ENT(t)->ek, ekb);
 }
 
 /* 4: the export cache's flush_time passes last_refresh: a miss. */
@@ -647,7 +664,7 @@ static void ebt_expkey_flush_time(struct kunit *test)
 	ebt_miss(t);
 	WRITE_ONCE(cd->flush_time, READ_ONCE(t->ek->h.last_refresh));
 	KUNIT_EXPECT_PTR_EQ(test, ebt_miss(t), t->exp);
-	KUNIT_EXPECT_PTR_NE(test, EBT_SLOT(t)->ek, t->ek);
+	KUNIT_EXPECT_PTR_NE(test, EBT_ENT(t)->ek, t->ek);
 	KUNIT_EXPECT_EQ(test, t->ek_upcalls, 1);
 	KUNIT_EXPECT_EQ(test, t->exp_upcalls, 0);
 }
@@ -711,7 +728,7 @@ static void ebt_negative_export(struct kunit *test)
 	clear_bit(CACHE_NEGATIVE, &t->exp->h.flags);
 }
 
-/* 9: another auth_domain misses; a gss client never borrows. */
+/* 9: another auth_domain misses and keeps the first; gss never borrows. */
 static void ebt_other_client(struct kunit *test)
 {
 	struct ebt *t = test->priv;
@@ -724,7 +741,7 @@ static void ebt_other_client(struct kunit *test)
 	t->rqstp->rq_client = t->dom[1];
 	exp = ebt_miss(t);
 	KUNIT_EXPECT_PTR_EQ(test, exp->ex_client, t->dom[1]);
-	KUNIT_EXPECT_PTR_EQ(test, EBT_SLOT(t)->client, t->dom[1]);
+	KUNIT_EXPECT_PTR_EQ(test, EBT_ENT(t)->client, t->dom[1]);
 
 	/* rq_gssclient set (a gss request's fallback domain) */
 	t->rqstp->rq_client = t->dom[0];
@@ -755,7 +772,7 @@ static void ebt_other_client(struct kunit *test)
 	EBT_EXPECT_DELTA(test, &d, skip, 1);
 	EBT_EXPECT_DELTA(test, &d, fill, 0);
 	KUNIT_EXPECT_FALSE(test, EBT_SLOT(t)->borrowed);
-	KUNIT_EXPECT_PTR_EQ(test, EBT_SLOT(t)->client, t->dom[1]);
+	KUNIT_EXPECT_PTR_EQ(test, EBT_ENT(t)->client, t->dom[1]);
 
 	/* an RPCSEC_GSS credential with no gss domain */
 	t->rqstp->rq_cred.cr_flavor = RPC_AUTH_GSS_KRB5;
@@ -763,11 +780,11 @@ static void ebt_other_client(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, ebt_borrow(t, &slot));
 	EBT_EXPECT_DELTA(test, &d, skip, 1);
 	t->rqstp->rq_cred.cr_flavor = RPC_AUTH_NULL;
-	KUNIT_EXPECT_PTR_EQ(test, ebt_miss(t), t->exp);
+	KUNIT_EXPECT_PTR_EQ(test, ebt_hit_once(t), t->exp);
 	t->rqstp->rq_cred.cr_flavor = RPC_AUTH_UNIX;
 }
 
-/* 10: another net misses and refills from that net's caches. */
+/* 10: another net misses and fills from that net's caches; net 0 stays. */
 static void ebt_other_net(struct kunit *test)
 {
 	struct ebt *t = test->priv;
@@ -777,11 +794,11 @@ static void ebt_other_net(struct kunit *test)
 	ebt_miss(t);
 	exp = ebt_miss_in(t, 1, FSID_NUM, &t->fsid);
 	KUNIT_EXPECT_PTR_EQ(test, exp->cd, t->n[1].nn->svc_export_cache);
-	KUNIT_EXPECT_PTR_EQ(test, EBT_SLOT(t)->net, t->n[1].net);
-	KUNIT_EXPECT_PTR_EQ(test, ebt_miss(t), t->exp);
+	KUNIT_EXPECT_PTR_EQ(test, EBT_ENT(t)->net, t->n[1].net);
+	KUNIT_EXPECT_PTR_EQ(test, ebt_hit_once(t), t->exp);
 }
 
-/* 11: another fsid type or fsid misses. */
+/* 11: another fsid type or fsid misses; the first fsid stays cached. */
 static void ebt_other_fsid(struct kunit *test)
 {
 	struct ebt *t = test->priv;
@@ -791,12 +808,39 @@ static void ebt_other_fsid(struct kunit *test)
 	ebt_install(t);
 	ebt_miss(t);
 	ebt_miss_in(t, 0, FSID_NUM, &fsid2);
-	KUNIT_EXPECT_EQ(test, EBT_SLOT(t)->fsid[0], fsid2);
-	ebt_miss(t);
+	KUNIT_EXPECT_EQ(test, EBT_ENT(t)->fsid[0], fsid2);
+	ebt_hit_once(t);
 	/* the same leading bytes under another type */
 	ebt_miss_in(t, 0, FSID_DEV, devfsid);
-	KUNIT_EXPECT_EQ(test, EBT_SLOT(t)->fsid_type, FSID_DEV);
+	KUNIT_EXPECT_EQ(test, EBT_ENT(t)->fsid_type, FSID_DEV);
+	ebt_hit_once(t);
+}
+
+/* 11a: more keys than entries: the least recently used one is replaced. */
+static void ebt_lru_evict(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct nfsd_exp_slot *s = EBT_SLOT(t);
+	u32 fsid2 = EBT_FSID + 1, fsid3 = EBT_FSID + 2;
+	unsigned int nr = s->nr;
+	struct ebt_delta d;
+
+	KUNIT_ASSERT_GE(test, nr, 2U);
+	ebt_install(t);
+	s->nr = 2;		/* two of the slot's entries */
+	ebt_mark(&d);
 	ebt_miss(t);
+	ebt_miss_in(t, 0, FSID_NUM, &fsid2);
+	EBT_EXPECT_DELTA(test, &d, evict, 0);
+	ebt_hit_once(t);	/* EBT_FSID is now the more recent */
+	ebt_mark(&d);
+	ebt_miss_in(t, 0, FSID_NUM, &fsid3);
+	EBT_EXPECT_DELTA(test, &d, evict, 1);
+	ebt_hit_once(t);	/* EBT_FSID kept, fsid2 replaced */
+	ebt_mark(&d);
+	ebt_miss_in(t, 0, FSID_NUM, &fsid2);
+	EBT_EXPECT_DELTA(test, &d, evict, 1);
+	s->nr = nr;
 }
 
 /* 12: a drain of an idle slot drops both references. */
@@ -840,14 +884,14 @@ static void ebt_drain_borrowed(struct kunit *test)
 	nfsd_exp_slots_drain();
 	KUNIT_EXPECT_TRUE(test, s->borrowed);
 	KUNIT_EXPECT_TRUE(test, s->dead);
-	KUNIT_EXPECT_PTR_EQ(test, s->exp, t->exp);
-	KUNIT_EXPECT_PTR_EQ(test, s->ek, t->ek);
+	KUNIT_EXPECT_PTR_EQ(test, ebt_ent(s)->exp, t->exp);
+	KUNIT_EXPECT_PTR_EQ(test, ebt_ent(s)->ek, t->ek);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek + 1);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp + 1);
 	/* a second drain changes nothing */
 	nfsd_exp_slots_drain();
 	KUNIT_EXPECT_TRUE(test, s->dead);
-	KUNIT_EXPECT_PTR_EQ(test, s->exp, t->exp);
+	KUNIT_EXPECT_PTR_EQ(test, ebt_ent(s)->exp, t->exp);
 	nfsd_exp_slot_return(slot);
 	ebt_expect_idle_empty(test, t);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek);
@@ -878,8 +922,8 @@ static void ebt_double_return(struct kunit *test)
 	EBT_EXPECT_DELTA(test, &d, bad_return, 1);
 	KUNIT_EXPECT_FALSE(test, s->borrowed);
 	KUNIT_EXPECT_FALSE(test, s->dead);
-	KUNIT_EXPECT_PTR_EQ(test, s->exp, t->exp);
-	KUNIT_EXPECT_PTR_EQ(test, s->ek, t->ek);
+	KUNIT_EXPECT_PTR_EQ(test, ebt_ent(s)->exp, t->exp);
+	KUNIT_EXPECT_PTR_EQ(test, ebt_ent(s)->ek, t->ek);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek + 1);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp + 1);
 
@@ -1010,10 +1054,10 @@ static void ebt_expired_refill(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test, ebt_miss(t), t->exp);
 	KUNIT_EXPECT_EQ(test, t->ek_upcalls, 1);
 	KUNIT_EXPECT_EQ(test, t->defers, 0);
-	KUNIT_EXPECT_PTR_NE(test, s->ek, old);
+	KUNIT_EXPECT_PTR_NE(test, ebt_ent(s)->ek, old);
 
 	t->upcall_mode = EBT_PEND;
-	WRITE_ONCE(s->ek->h.expiry_time, seconds_since_boot() - 1);
+	WRITE_ONCE(ebt_ent(s)->ek->h.expiry_time, seconds_since_boot() - 1);
 	ebt_fh(t, &fh, FILEID_ROOT);
 	ebt_mark(&d);
 	KUNIT_EXPECT_EQ(test, fh_verify(t->rqstp, &fh, 0, NFSD_MAY_NOP),
@@ -1202,9 +1246,9 @@ static void ebt_fill_expkey_cd(struct kunit *test)
 		struct nfsd_net *nn;
 
 		ebt_miss_in(t, ni, FSID_NUM, &t->fsid);
-		KUNIT_ASSERT_PTR_EQ(test, s->net, t->n[ni].net);
-		nn = net_generic(s->net, nfsd_net_id);
-		KUNIT_EXPECT_PTR_EQ(test, s->ekcd, nn->svc_expkey_cache);
+		KUNIT_ASSERT_PTR_EQ(test, ebt_ent(s)->net, t->n[ni].net);
+		nn = net_generic(ebt_ent(s)->net, nfsd_net_id);
+		KUNIT_EXPECT_PTR_EQ(test, ebt_ent(s)->ekcd, nn->svc_expkey_cache);
 	}
 }
 
@@ -1254,7 +1298,10 @@ static void ebt_drain_during_refill(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp);
 }
 
-/* 26: a key change drops the previous pair. */
+/*
+ * 26: a second key fills another entry of the slot, and the first
+ * pair stays held there (ebt_lru_evict has a full slot drop one).
+ */
 static void ebt_key_change(struct kunit *test)
 {
 	struct ebt *t = test->priv;
@@ -1271,9 +1318,9 @@ static void ebt_key_change(struct kunit *test)
 	ebt_miss(t);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek + 1);
 	KUNIT_EXPECT_PTR_EQ(test, ebt_miss_in(t, 0, FSID_NUM, &fsid2), expb);
-	KUNIT_EXPECT_PTR_EQ(test, EBT_SLOT(t)->ek, ekb);
-	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek);
-	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp);
+	KUNIT_EXPECT_PTR_EQ(test, EBT_ENT(t)->ek, ekb);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek + 1);
+	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp + 1);
 }
 
 /*
@@ -1302,7 +1349,7 @@ static void ebt_decode_failure(struct kunit *test)
 	KUNIT_EXPECT_NULL(test, fh.fh_export);
 	KUNIT_EXPECT_NULL(test, fh.fh_exp_slot);
 	KUNIT_EXPECT_FALSE(test, EBT_SLOT(t)->borrowed);
-	KUNIT_EXPECT_PTR_EQ(test, EBT_SLOT(t)->exp, t->exp);
+	KUNIT_EXPECT_PTR_EQ(test, EBT_ENT(t)->exp, t->exp);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek + 1);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp + 1);
 	fh_put(&fh);
@@ -1383,15 +1430,15 @@ static void ebt_rtc_drain_borrowed(struct kunit *test)
 	nfsd_exp_slots_drain();
 	KUNIT_EXPECT_TRUE(test, s->borrowed);
 	KUNIT_EXPECT_TRUE(test, s->dead);
-	KUNIT_EXPECT_PTR_EQ(test, s->exp, t->exp);
-	KUNIT_EXPECT_PTR_EQ(test, s->ek, t->ek);
+	KUNIT_EXPECT_PTR_EQ(test, ebt_ent(s)->exp, t->exp);
+	KUNIT_EXPECT_PTR_EQ(test, ebt_ent(s)->ek, t->ek);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek + 1);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp + 1);
 	fh_put(&fh);
 	KUNIT_EXPECT_FALSE(test, s->borrowed);
 	KUNIT_EXPECT_FALSE(test, s->dead);
-	KUNIT_EXPECT_NULL(test, s->exp);
-	KUNIT_EXPECT_NULL(test, s->ek);
+	KUNIT_EXPECT_NULL(test, ebt_ent(s)->exp);
+	KUNIT_EXPECT_NULL(test, ebt_ent(s)->ek);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->ek->h), bek);
 	KUNIT_EXPECT_EQ(test, ebt_ref(&t->exp->h), bexp);
 	EBT_EXPECT_DELTA(test, &d, bad_return, 0);
@@ -1443,6 +1490,7 @@ static struct kunit_case nfsd_export_borrow_cases[] = {
 	KUNIT_CASE(ebt_other_client),
 	KUNIT_CASE(ebt_other_net),
 	KUNIT_CASE(ebt_other_fsid),
+	KUNIT_CASE(ebt_lru_evict),
 	KUNIT_CASE(ebt_drain_idle),
 	KUNIT_CASE(ebt_drain_borrowed),
 	KUNIT_CASE(ebt_double_return),
