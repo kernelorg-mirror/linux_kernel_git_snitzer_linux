@@ -292,9 +292,14 @@ says why WRITEs cannot reach it.
   `5555163d661a0`, the per-CPU transport choice for nconnect, which
   writes 74.5 to 74.9; the tip reverts it (78.00, t2-r1118).  **So a
   pass runs with the client on a stack built from the tip, not build
-  541's own** (`FLAMEGRAPH/136-write-regression/`: `cbuild136.sh`,
-  loaded with `cswap131.sh`), until a client kernel carries the
-  reverts.  The mark was 74.6 from 18 November (Mike: "just lower to
+  541's own: since 18 November, late (Mike: "yes, put the reverted
+  stack in the client's updates/"), the client's
+  `/lib/modules/7.3.3-16.hs.541.canary.el9.x86_64/updates/` holds the
+  17 NFS client modules built from `9d2c9fcede7b6` (sunrpc
+  `2355B960B6A9951899AF6B4`; `COMMIT` and `README` beside them), so
+  `modprobe`, a boot and `cswap131.sh stock` all load it.**  nfsd is
+  not built, so the rpm's nfsd no longer loads on the client.  Until a
+  client kernel carries the reverts.  The mark was 74.6 from 18 November (Mike: "just lower to
   74.6, this is a known issue we need to get back to later.. IOPS is
   what matters for now") and 75.0 from 17 November.  **From 16 to 17
   November it passed at 77.6.  Until 16 November
