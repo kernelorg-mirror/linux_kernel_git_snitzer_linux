@@ -235,3 +235,12 @@ should be build 469's (`AB674CEE87351D814F68CEE`).  Then two WRITE
 passes with `prof-write.sh`, held with `EXP_CLI_WQ="rpciod/per_cpu=0"`
 (469's rpciod is unbound) and without the per-CPU map's module
 parameter (469 has none).
+
+**First build (19:55): fs/nfs did not compile** against 7.3.3's
+headers: 36 errors, all one change, the VFS's inode operations taking
+`const struct mnt_idmap *` in 7.3.3 where 7.3.0-rc7's `fs/nfs` has
+`struct mnt_idmap *` (namespace.c 4, nfs3proc.c 13, nfs4proc.c 17,
+symlink.c 2).  sunrpc, lockd and nfs_common built.  Adapted for the
+build only, in the client's copy, with no change in behaviour: every
+`struct mnt_idmap *` not already const in `fs/nfs/*.[ch]` and
+`include/linux/nfs*.h` becomes `const struct mnt_idmap *`.
