@@ -51,3 +51,18 @@ tcp_limit_output_bytes back to 256K and then 512K and then 1 MiB".
 `EXP_RTC_REBALANCE_MS` for a run) and `settled-iops.sh` 250.  Runs:
 t2-r1042 `EXP_TCP_LOB=262144`, r1043 524288, r1044 1048576, against
 r1038 and r1040 at 4 MiB.
+
+### Result (09:14 to 09:24)
+
+| Run | tcp_limit_output_bytes | M IOPS (ports) | p99 a; b (ms) | Busy (busiest) | us a READ | Work CPUs min / median / max | Ring CPUs min / median / max | Moves |
+|---|---|---|---|---|---|---|---|---|
+| t2-r1038 | 4 MiB | 2.91 (1.45 / 1.47) | 3.10; 3.03 | 78% (100%) | 17.15 | 58 / 81 / 91 | 64 / 78 / 94 | 24 |
+| t2-r1040 | 4 MiB | 2.91 (1.52 / 1.39) | 2.83; 3.29 | 77% (100%) | 16.93 | 59 / 82 / 92 | 59 / 77 / 100 | 21 |
+| t2-r1042 | 256 KiB | 2.93 (1.46 / 1.47) | 2.93; 3.06 | 78% (100%) | 17.04 | 61 / 82 / 92 | 61 / 78 / 93 | 19 |
+| t2-r1043 | 512 KiB | 2.95 (1.45 / 1.50) | 3.06; 2.83 | 78% (96%) | 16.92 | 59 / 82 / 94 | 67 / 78 / 89 | 31 |
+| t2-r1044 | 1 MiB | 2.95 (1.50 / 1.45) | 2.87; 2.97 | 78% (100%) | 16.92 | 59 / 84 / 91 | 68 / 81 / 95 | 11 |
+
+One run a size: 2.91 to 2.95 M and 16.92 to 17.15 us, 1.4%, the spread.
+512 KiB and 1 MiB on top by 0.02 to 0.04 M, 4 MiB last; no size stands
+out under the rebalancer.  `settled-iops.sh` stays at 4 MiB until Mike
+says.  No new kernel warning.
