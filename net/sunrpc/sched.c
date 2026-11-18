@@ -1351,6 +1351,11 @@ void rpciod_down(void)
 	module_put(THIS_MODULE);
 }
 
+static bool rpciod_per_cpu = true;
+module_param(rpciod_per_cpu, bool, 0444);
+MODULE_PARM_DESC(rpciod_per_cpu,
+		 "Run rpciod per-CPU (Y) or unbound (N)");
+
 /*
  * Start up the rpciod workqueue.
  */
@@ -1361,14 +1366,18 @@ static int rpciod_start(void)
 	/*
 	 * Create the rpciod thread and wait for it to start.
 	 *
-	 * rpciod is per-CPU: an async task is woken on the CPU that saw its
-	 * reply and runs there.  An unbound rpciod shares one nr_active limit
-	 * per NUMA node, so with tens of thousands of RPCs in flight most
-	 * work items go inactive and every completion must activate one under
-	 * the node's lock.  A per-CPU pwq has its own max_active and never
-	 * touches the node limit.  WQ_MEM_RECLAIM still gives it a rescuer.
+	 * rpciod is per-CPU by default: an async task is woken on the CPU
+	 * that saw its reply and runs there.  An unbound rpciod shares one
+	 * nr_active limit per NUMA node, so with tens of thousands of RPCs
+	 * in flight most work items go inactive and every completion must
+	 * activate one under the node's lock.  A per-CPU pwq has its own
+	 * max_active and never touches the node limit.  An unbound rpciod
+	 * (rpciod_per_cpu=N) lets the scheduler spread a CPU's backlog of
+	 * tasks over its node instead.  WQ_MEM_RECLAIM gives either a
+	 * rescuer.
 	 */
-	wq = alloc_workqueue("rpciod", WQ_MEM_RECLAIM | WQ_PERCPU | WQ_SYSFS, 0);
+	wq = alloc_workqueue("rpciod", WQ_MEM_RECLAIM | WQ_SYSFS |
+			     (rpciod_per_cpu ? WQ_PERCPU : WQ_UNBOUND), 0);
 	if (!wq)
 		goto out_failed;
 	rpciod_workqueue = wq;
