@@ -19,3 +19,18 @@ Built into `/var/tmp/svcstack-541-parkpc` (sunrpc
 
 The quick A/B (Mike: no overkill): one `prof-srv.sh` run (t2-r1028)
 against t2-r1027.
+
+## Result: t2-r1028 (18 November, 08:04 to 08:08)
+
+**2.83 M IOPS** (1.42 / 1.40), p99 3.06 / 3.29 ms, server 78% busy, no
+new kernel warning: the most yet at this shape (t2-r1027 2.74, the
+spill's runs 2.71 to 2.78).  Park and unpark, now inlined beside their
+`percpu_counter_add_batch()`: 0.26% (park, under
+`svc_rtc_after_process`) and 0.24% (unpark), **0.50% against 2.76%**
+in t2-r1027, about **0.5 us a READ saved** (1% is 0.226 us at 2.83 M).
+
+The rest of `percpu_counter_add_batch` (1.85% in all): nfsd's read
+bytes from `nfsd_finish_read` 0.68%, `svc_xprt_recv_call` 0.32%, the
+DRC's from `nfsd_cache_lookup` 0.23%.  A byte count of 4096 a READ is
+past the default batch, so each such add folds into the shared count
+under its spinlock: the next shared line to look at.
