@@ -344,3 +344,16 @@ The test nfsd rebuilt from the tree (W=1, no warning; its only suite
 `nfsd_export_borrow_suite`); the running stack's nfsd is not changed,
 the interface commit touching nothing nfsd runs.  Next: `kunit-export.sh
 /var/tmp/svcstack-541-kunit` again.
+
+### Both borrow suites pass (02:33)
+
+**`sunrpc-nfsd-export-borrow` 32 of 32, no skip, no `WARNING:`, `BUG:`
+or `Oops` in its run**, after the fixes above; with
+`svcauth_unix_borrow` 12 of 12 (02:20), both borrows' suites pass on
+the host.  The stack is back at the settled setting on
+`/var/tmp/svcstack-541-kunit/stack` (sunrpc `85537945BAC1207EDA22E45`,
+nfsd `DC178C9D921DD1CDFF947D7`), kdump armed.
+
+This boot carries the first run's writes into freed test nets, above:
+nothing has faulted, but a fault later on this boot is to be read with
+them in mind, and a reboot clears them.
