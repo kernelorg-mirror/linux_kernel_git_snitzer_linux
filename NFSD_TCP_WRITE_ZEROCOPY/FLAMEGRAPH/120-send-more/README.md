@@ -49,3 +49,49 @@ about 1 now.
 t2-r1007 (send_more N): **RERUN, 74.53 GB/s** (no drive stepped down, no
 new kernel warning), as round 111's t2-r945 at 74.52.  Rerun as t2-r1017
 after t2-r1016.
+
+## Results (18 November, 06:26 to 07:01)
+
+READ pass t2-r1008 (send_more N): **PASS, 79.47 GB/s** (76% of the
+drives' 104.58 with local fio, 81% of iperf3's 98.31).  No new kernel
+warning in any run.
+
+| Run | send_more | M IOPS (ports) | p99 a; b (ms) | Work / ring CPUs | Segments out / in a reply |
+|---|---|---|---|---|---|
+| t2-r1009 | Y | 2.76 (1.37 / 1.40) | 3.00; 3.03 | 81.6% / 75.7% | 0.929 / 1.225 |
+| t2-r1010 | N | 2.67 (1.26 / 1.41) | 3.42; 3.26 | 81.2% / 70.9% | 1.108 / 1.254 |
+| t2-r1011 | Y | 2.75 (1.36 / 1.39) | 3.19; 3.03 | 80.2% / 80.9% | 0.926 / 1.224 |
+| t2-r1012 | N | 2.70 (1.37 / 1.33) | 3.36; 3.69 | 84.5% / 59.8% | 1.105 / 1.277 |
+| t2-r1013 | Y | 2.71 (1.34 / 1.37) | 3.23; 3.19 | 82.1% / 66.6% | 0.927 / 1.218 |
+| t2-r1014 | N | 2.74 (1.31 / 1.42) | 3.26; 3.19 | — | — |
+
+Y 2.740 M on the mean, N 2.703: +1.4%, inside the spread; p99 lower in
+every pair; segments out a reply 16% fewer (0.93 against 1.11), in 4%.
+Every reply had another after it (100% with MSG_MORE): under load a
+connection always has calls parked.  Mike: "I can already say its worth
+adding to settled-iops.sh" (`228291423164e`).
+
+### The per-READ breakdown, with it Y (t2-r1015)
+
+2.76 M, server 79% busy: 1% of the samples is 0.232 us a READ, 18.3 us a
+READ in all (t2-r1006: 18.4).
+
+| Stage (with children) | t2-r1015 | us | t2-r1006 | us |
+|---|---|---|---|---|
+| rtc work items (`svc_rtc_fast`) | 49.8% | 11.6 | 46.1% | 10.9 |
+| - processing (`svc_process`) | 30.2% | 7.0 | 27.7% | 6.5 |
+| -- `nfsd3_proc_read` | 21.1% | 4.9 | 19.3% | 4.6 |
+| --- the XFS read | 13.5% | 3.1 | 12.4% | 2.9 |
+| --- the file (`nfsd_file_lookup_cached`) | 6.0% | 1.4 | 5.5% | 1.3 |
+| -- the reply's encode | 3.3% | 0.8 | 3.0% | 0.7 |
+| - the reply's send (`tcp_sendmsg_locked`) | 11.1% | **2.6** | 14.9% | 3.5 |
+| - the call's receive | 11.9% | 2.8 | 11.5% | 2.7 |
+| softirq (`handle_softirqs`) | 27.5% | **6.4** | 25.0% | 5.9 |
+| idle (`default_idle_call`) | 9.0% | | 11.2% | |
+| `tcp_write_xmit` (in both) | 13.1% | 3.0 | 13.7% | 3.2 |
+
+The send fell 0.9 us, but `tcp_write_xmit` hardly moved: with MSG_MORE
+the partial tail is pushed by the ACK, in softirq (+0.5 us), not by the
+send.  Fewer segments, about the same transmit work; the sum a READ is
+unchanged, and the rest moves within the noise of the arithmetic (the
+stages are shares of a host that is busier).
