@@ -398,6 +398,13 @@ RTC_SPILL_CPUS_SETTLED=$RTC_SPILL_CPUS
 RTC_SPILL_WEIGHT_SETTLED=$RTC_SPILL_WEIGHT
 [ -n "${EXP_RTC_SPILL_CPUS:-}" ] && { [ "$EXP_RTC_SPILL_CPUS" = none ] && RTC_SPILL_CPUS= || RTC_SPILL_CPUS=$EXP_RTC_SPILL_CPUS; }
 [ -n "${EXP_RTC_SPILL_WEIGHT:-}" ] && RTC_SPILL_WEIGHT=$EXP_RTC_SPILL_WEIGHT
+# sunrpc's svc_rtc_send_more ("SUNRPC: Let the rtc send FIFO batch replies
+# with MSG_MORE", 852fb67105d5b; FLAMEGRAPH round 120): N, its default,
+# at rest; EXP_RTC_SEND_MORE holds a run to Y.  A sunrpc without it is not
+# BAD while N is wanted.
+RTC_SEND_MORE=N
+RTC_SEND_MORE_SETTLED=$RTC_SEND_MORE
+[ -n "${EXP_RTC_SEND_MORE:-}" ] && RTC_SEND_MORE=$EXP_RTC_SEND_MORE
 # sunrpc's svc_rtc_balance, placing each rtc work item on the eligible CPU
 # holding the fewest rather than by a hash ("SUNRPC: Optionally place each
 # rtc work item on the least-loaded CPU", fe25e474fa3de; FLAMEGRAPH round
@@ -699,6 +706,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "$RTC_CPUS" != "$RTC_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_cpus=${RTC_CPUS:-none}"
 	[ "$RTC_SPILL_CPUS" != "$RTC_SPILL_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_spill_cpus=${RTC_SPILL_CPUS:-none}"
 	[ "$RTC_SPILL_WEIGHT" != "$RTC_SPILL_WEIGHT_SETTLED" ] && OFF="$OFF svc_rtc_spill_weight=$RTC_SPILL_WEIGHT"
+	[ "$RTC_SEND_MORE" != "$RTC_SEND_MORE_SETTLED" ] && OFF="$OFF svc_rtc_send_more=$RTC_SEND_MORE"
 	[ "$RTC_BALANCE" != "$RTC_BALANCE_SETTLED" ] && OFF="$OFF svc_rtc_balance=$RTC_BALANCE"
 	[ -n "$SVCAUTH_BORROW" ] && OFF="$OFF svcauth_borrow=$SVCAUTH_BORROW"
 	[ -n "$EXPORT_BORROW_SLOTS" ] && OFF="$OFF export_borrow_slots=$EXPORT_BORROW_SLOTS"
@@ -755,6 +763,11 @@ audit_nfsd() {
 		want "sunrpc svc_rtc_spill_weight" "$(cat $SUNRPC/svc_rtc_spill_weight)" "$RTC_SPILL_WEIGHT"
 	elif [ -n "$RTC_SPILL_CPUS" ]; then
 		bad "sunrpc svc_rtc_spill_cpus" "not in this sunrpc" "a sunrpc with 219a15abdd219"
+	fi
+	if [ -e $SUNRPC/svc_rtc_send_more ]; then
+		want "sunrpc svc_rtc_send_more" "$(cat $SUNRPC/svc_rtc_send_more)" "$RTC_SEND_MORE"
+	elif [ "$RTC_SEND_MORE" = Y ]; then
+		bad "sunrpc svc_rtc_send_more" "not in this sunrpc" "a sunrpc with 852fb67105d5b"
 	fi
 	if [ -e $SUNRPC/svc_rtc_balance ]; then
 		want "sunrpc svc_rtc_balance" "$(cat $SUNRPC/svc_rtc_balance)" "$RTC_BALANCE"
@@ -1208,6 +1221,7 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 		[ -w $SUNRPC/svc_rtc_balance ] && [ "$(cat $SUNRPC/svc_rtc_balance)" != "$RTC_BALANCE" ] && echo $RTC_BALANCE > $SUNRPC/svc_rtc_balance
 		[ -w $SUNRPC/svc_rtc_spill_cpus ] && [ "$(cat $SUNRPC/svc_rtc_spill_cpus)" != "$RTC_SPILL_CPUS" ] && echo "${RTC_SPILL_CPUS:-}" > $SUNRPC/svc_rtc_spill_cpus
 		[ -w $SUNRPC/svc_rtc_spill_weight ] && [ "$(cat $SUNRPC/svc_rtc_spill_weight)" != "$RTC_SPILL_WEIGHT" ] && echo $RTC_SPILL_WEIGHT > $SUNRPC/svc_rtc_spill_weight
+		[ -w $SUNRPC/svc_rtc_send_more ] && [ "$(cat $SUNRPC/svc_rtc_send_more)" != "$RTC_SEND_MORE" ] && echo $RTC_SEND_MORE > $SUNRPC/svc_rtc_send_more
 		[ -n "$SVCAUTH_BORROW" ] && [ -w $SUNRPC/svcauth_borrow ] && [ "$(cat $SUNRPC/svcauth_borrow)" != "$SVCAUTH_BORROW" ] && echo $SVCAUTH_BORROW > $SUNRPC/svcauth_borrow
 		_ebs=/sys/module/nfsd/parameters/export_borrow_slots
 		[ -n "$EXPORT_BORROW_SLOTS" ] && [ -w $_ebs ] && [ "$(cat $_ebs)" != "$EXPORT_BORROW_SLOTS" ] && echo $EXPORT_BORROW_SLOTS > $_ebs

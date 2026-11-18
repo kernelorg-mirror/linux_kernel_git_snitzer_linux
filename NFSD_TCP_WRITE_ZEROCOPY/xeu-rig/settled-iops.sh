@@ -115,7 +115,8 @@ run)
 	"$@"; rc=$?
 	env -u EXP_NFSD_THREADS -u EXP_SYSCTL -u EXP_POOL_MODE -u EXP_SVCAUTH_BORROW \
 		-u EXP_EXPORT_BORROW_SLOTS -u EXP_FH_BORROW_SLOTS \
-		-u EXP_RTC_SPILL_CPUS -u EXP_RTC_SPILL_WEIGHT ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
+		-u EXP_RTC_SPILL_CPUS -u EXP_RTC_SPILL_WEIGHT -u EXP_RTC_SEND_MORE \
+		./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
 	echo "settled again: $(tail -1 /var/tmp/zc-run-logs/settled-iops-after.txt)"
 	exit $rc ;;
 *) echo "settled-iops.sh apply|audit|run <command ...>"; exit 1 ;;
