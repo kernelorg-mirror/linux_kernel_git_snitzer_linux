@@ -18,7 +18,8 @@ rounds.
 `xeu-rig/write-check.sh`: one two-port WRITE run on all eight drives at
 `settled.sh`'s setting, fio 8 MiB writes on libaio, 16 jobs a port at
 iodepth 16, nconnect 16 a port, `WARM=3 RUNTIME=15`.  It passes at
-**75.0 GB/s since 17 November** (77.6 before; TODO 2) with no drive
+**74.6 GB/s since 18 November** (75.0 from 17 November, 77.6 before;
+TODO 2) with no drive
 stepped down and no new kernel warning.
 
 | Client kernel | Runs | GB/s | Drives each (busiest) | Client busy |
@@ -37,7 +38,12 @@ kernel".  **The mark is lowered to 75.0 for build 541's client (Mike,
 75 GB/s, we will hunt down the client regression after we get IOPS
 performance up")**, until its WRITE path is recovered (TODO 2).  The
 tip's server stack on build 541 read 74.91 (t2-r915, RERUN under
-both marks).
+both marks).  **Lowered again to 74.6 on 18 November (Mike: "just lower to 74.6,
+this is a known issue we need to get back to later.. IOPS is what
+matters for now")**, after the export borrow's build (FLAMEGRAPH round
+110) read 74.55 and 74.98 (t2-r931, r934), about 0.3 under the stacks
+before it (74.85 to 75.25) and inside their spread; whether the
+borrow costs WRITEs anything is not known (TODO 5).
 
 For scale: the drives take 9.8 GB/s each at 98% busy (78.4 for eight),
 and a WRITE of 1 MiB costs the client about 2.17 bytes of memory
@@ -123,7 +129,7 @@ against it.  For WRITEs on tardis2:
      held until TCP sends them, and the per-CPU transport map second).
 2. **TODO: reset the WRITE pass's mark to 77.6 GB/s** once whatever
    holds back build 541's client is fixed (Mike, 17 November).  It is
-   75.0 in `xeu-rig/write-check.sh` (the `g >= 75.0` test and its
+   74.6 in `xeu-rig/write-check.sh` (the `g >= 74.6` test and its
    header) and in AGENTS.md's hard rule only for that client; when
    TODO 1 brings the pass back to 77.6 or more, put 77.6 back in both
    places and say so here.  A READ or IOPS round's WRITE pass is
@@ -138,3 +144,6 @@ against it.  For WRITEs on tardis2:
    Which transport each WRITE takes on build 541 is worth reading
    before any A/B (the per-transport queue lengths in the client's
    sysfs, `/sys/kernel/sunrpc/xprt-switches/`).
+5. **Whether the export borrow costs WRITEs** (round 110): WRITE passes
+   on one build at `nfsd.export_borrow_slots` 16 and 0 in turns, three
+   a side.  Not run (Mike, 18 November: IOPS first).
