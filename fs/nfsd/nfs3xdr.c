@@ -337,6 +337,24 @@ svcxdr_decode_devicedata3(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 		svcxdr_decode_specdata3(xdr, args);
 }
 
+/*
+ * In the initial user namespace every valid ID maps to itself: skip the
+ * mapping's extent lookup, done twice for every attribute encoded.
+ */
+static u32 nfsd3_uid(struct user_namespace *userns, kuid_t uid)
+{
+	if (userns == &init_user_ns && uid_valid(uid))
+		return __kuid_val(uid);
+	return from_kuid_munged(userns, uid);
+}
+
+static u32 nfsd3_gid(struct user_namespace *userns, kgid_t gid)
+{
+	if (userns == &init_user_ns && gid_valid(gid))
+		return __kgid_val(gid);
+	return from_kgid_munged(userns, gid);
+}
+
 static bool
 svcxdr_encode_fattr3(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 		     const struct svc_fh *fhp, const struct kstat *stat)
@@ -352,8 +370,8 @@ svcxdr_encode_fattr3(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 	*p++ = cpu_to_be32(nfs3_ftypes[(stat->mode & S_IFMT) >> 12]);
 	*p++ = cpu_to_be32((u32)(stat->mode & S_IALLUGO));
 	*p++ = cpu_to_be32((u32)stat->nlink);
-	*p++ = cpu_to_be32((u32)from_kuid_munged(userns, stat->uid));
-	*p++ = cpu_to_be32((u32)from_kgid_munged(userns, stat->gid));
+	*p++ = cpu_to_be32(nfsd3_uid(userns, stat->uid));
+	*p++ = cpu_to_be32(nfsd3_gid(userns, stat->gid));
 	if (S_ISLNK(stat->mode) && stat->size > NFS3_MAXPATHLEN)
 		p = xdr_encode_hyper(p, (u64)NFS3_MAXPATHLEN);
 	else
