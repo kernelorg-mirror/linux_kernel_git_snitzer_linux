@@ -442,7 +442,7 @@ svcxdr_encode_post_op_attr(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 	 */
 	if (fhp->fh_no_wcc || !dentry || !d_really_is_positive(dentry))
 		goto no_post_op_attrs;
-	if (fh_getattr(fhp, &stat) != nfs_ok)
+	if (__fh_getattr(fhp, &stat) != nfs_ok)
 		goto no_post_op_attrs;
 
 	if (xdr_stream_encode_item_present(xdr) < 0)
