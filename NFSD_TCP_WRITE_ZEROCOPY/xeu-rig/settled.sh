@@ -385,6 +385,19 @@ RTC_CPUS=
 [ $HOST = tardis2 ] && RTC_CPUS=$NFSD_CPUSET
 RTC_CPUS_SETTLED=$RTC_CPUS
 [ -n "${EXP_RTC_CPUS:-}" ] && { [ "$EXP_RTC_CPUS" = none ] && RTC_CPUS= || RTC_CPUS=$EXP_RTC_CPUS; }
+# sunrpc's svc_rtc_spill_cpus and svc_rtc_spill_weight ("SUNRPC: Let the
+# rtc balance spill onto other CPUs as a last resort", 219a15abdd219;
+# FLAMEGRAPH round 116): CPUs the balance places work items on after
+# svc_rtc_cpus, each counting as holding the weight.  Settled: none, and
+# the default weight 2.  EXP_RTC_SPILL_CPUS ("none" for empty) and
+# EXP_RTC_SPILL_WEIGHT hold a run to others.  A sunrpc without them is not
+# BAD while none are wanted.
+RTC_SPILL_CPUS=
+RTC_SPILL_WEIGHT=2
+RTC_SPILL_CPUS_SETTLED=$RTC_SPILL_CPUS
+RTC_SPILL_WEIGHT_SETTLED=$RTC_SPILL_WEIGHT
+[ -n "${EXP_RTC_SPILL_CPUS:-}" ] && { [ "$EXP_RTC_SPILL_CPUS" = none ] && RTC_SPILL_CPUS= || RTC_SPILL_CPUS=$EXP_RTC_SPILL_CPUS; }
+[ -n "${EXP_RTC_SPILL_WEIGHT:-}" ] && RTC_SPILL_WEIGHT=$EXP_RTC_SPILL_WEIGHT
 # sunrpc's svc_rtc_balance, placing each rtc work item on the eligible CPU
 # holding the fewest rather than by a hash ("SUNRPC: Optionally place each
 # rtc work item on the least-loaded CPU", fe25e474fa3de; FLAMEGRAPH round
@@ -684,6 +697,8 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_NFSD_CPUS:-}" ] && OFF="$OFF nfsd_cpus=$EXP_NFSD_CPUS"
 	[ -n "${EXP_RTC_READ:-}" ] && [ "$EXP_RTC_READ" != "$RTC_READ_SETTLED" ] && OFF="$OFF rtc_read=$EXP_RTC_READ"
 	[ "$RTC_CPUS" != "$RTC_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_cpus=${RTC_CPUS:-none}"
+	[ "$RTC_SPILL_CPUS" != "$RTC_SPILL_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_spill_cpus=${RTC_SPILL_CPUS:-none}"
+	[ "$RTC_SPILL_WEIGHT" != "$RTC_SPILL_WEIGHT_SETTLED" ] && OFF="$OFF svc_rtc_spill_weight=$RTC_SPILL_WEIGHT"
 	[ "$RTC_BALANCE" != "$RTC_BALANCE_SETTLED" ] && OFF="$OFF svc_rtc_balance=$RTC_BALANCE"
 	[ -n "$SVCAUTH_BORROW" ] && OFF="$OFF svcauth_borrow=$SVCAUTH_BORROW"
 	[ -n "$EXPORT_BORROW_SLOTS" ] && OFF="$OFF export_borrow_slots=$EXPORT_BORROW_SLOTS"
@@ -734,6 +749,12 @@ audit_nfsd() {
 		want "sunrpc svc_rtc_cpus" "$(cat $SUNRPC/svc_rtc_cpus)" "$RTC_CPUS"
 	elif [ -n "$RTC_CPUS_SETTLED" ]; then
 		bad "sunrpc svc_rtc_cpus" "not in this sunrpc" "a sunrpc with 2e2811d21f8c4"
+	fi
+	if [ -e $SUNRPC/svc_rtc_spill_cpus ]; then
+		want "sunrpc svc_rtc_spill_cpus" "$(cat $SUNRPC/svc_rtc_spill_cpus)" "$RTC_SPILL_CPUS"
+		want "sunrpc svc_rtc_spill_weight" "$(cat $SUNRPC/svc_rtc_spill_weight)" "$RTC_SPILL_WEIGHT"
+	elif [ -n "$RTC_SPILL_CPUS" ]; then
+		bad "sunrpc svc_rtc_spill_cpus" "not in this sunrpc" "a sunrpc with 219a15abdd219"
 	fi
 	if [ -e $SUNRPC/svc_rtc_balance ]; then
 		want "sunrpc svc_rtc_balance" "$(cat $SUNRPC/svc_rtc_balance)" "$RTC_BALANCE"
@@ -1185,6 +1206,8 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 		done
 		[ -w $SUNRPC/svc_rtc_cpus ] && [ "$(cat $SUNRPC/svc_rtc_cpus)" != "$RTC_CPUS" ] && echo "${RTC_CPUS:-}" > $SUNRPC/svc_rtc_cpus
 		[ -w $SUNRPC/svc_rtc_balance ] && [ "$(cat $SUNRPC/svc_rtc_balance)" != "$RTC_BALANCE" ] && echo $RTC_BALANCE > $SUNRPC/svc_rtc_balance
+		[ -w $SUNRPC/svc_rtc_spill_cpus ] && [ "$(cat $SUNRPC/svc_rtc_spill_cpus)" != "$RTC_SPILL_CPUS" ] && echo "${RTC_SPILL_CPUS:-}" > $SUNRPC/svc_rtc_spill_cpus
+		[ -w $SUNRPC/svc_rtc_spill_weight ] && [ "$(cat $SUNRPC/svc_rtc_spill_weight)" != "$RTC_SPILL_WEIGHT" ] && echo $RTC_SPILL_WEIGHT > $SUNRPC/svc_rtc_spill_weight
 		[ -n "$SVCAUTH_BORROW" ] && [ -w $SUNRPC/svcauth_borrow ] && [ "$(cat $SUNRPC/svcauth_borrow)" != "$SVCAUTH_BORROW" ] && echo $SVCAUTH_BORROW > $SUNRPC/svcauth_borrow
 		_ebs=/sys/module/nfsd/parameters/export_borrow_slots
 		[ -n "$EXPORT_BORROW_SLOTS" ] && [ -w $_ebs ] && [ "$(cat $_ebs)" != "$EXPORT_BORROW_SLOTS" ] && echo $EXPORT_BORROW_SLOTS > $_ebs
