@@ -87,3 +87,39 @@ miss then does nothing cache_check() does not.  The export borrow has
 the same rule (mountd answers its upcalls, so it matters less there).
 The A/B below runs with the gap in place; its fill counts show its
 cost.
+
+## The first A/B, stopped (18 November, 00:56 to 01:03)
+
+| Run | svcauth_borrow | M IOPS (ports) | ms mean / p99 | Server busy (busiest) | Client busy (busiest) | ip_map hits / fills | gid hits / fills |
+|---|---|---|---|---|---|---|---|
+| t2-r937 | Y | 2.53 (1.26 / 1.27) | 1.21 / 4.42 | 71% (98%) | 71% (77%) | 67.42 M / 2,651 | 44.63 M / 22.79 M |
+| t2-r938 | N | 2.49 (1.25 / 1.24) | 1.23 / 4.49 | 72% (94%) | 70% (75%) | | |
+
+A third of t2-r937's gid lookups missed, the gap above.  Mike stopped the
+A/B there ("please stop, build CACHE_PENDING fixed code and retest
+A/B"); t2-r938's last seconds overlapped the build of the fix, so it is
+not a clean figure.  No new kernel warning in either.
+
+## The CACHE_PENDING fix and the suite
+
+- `08924f8cb667b` "SUNRPC: Borrow an auth cache entry while its refresh
+  is pending" and `33a76739cdd15` "NFSD: Borrow an export while its
+  refresh is pending": an entry whose refresh upcall is already pending
+  is fresh until it expires (cache_check() returns it as it stands
+  then, and starts no other upcall).
+- `01ad6b07da122` (the suite's interface) and `2c014fffa6c3f`, the
+  `svcauth_unix_borrow` suite, eleven cases; compiled at W=1 against
+  541, not run yet.
+
+Built into `/var/tmp/svcstack-541-pending/stack` (sunrpc
+`E834384870D73293B573D8C`, nfsd `DC178C9D921DD1CDFF947D7`), no warning.
+The plan:
+
+    cd xeu-rig
+    STACK=/var/tmp/svcstack-541-pending/stack SUNRPC_KO=none \
+        ./step.sh /var/tmp/zc-run-logs/541 swap-pending ./swap-sunrpc.sh
+    ./settled.sh apply
+    ./write-check.sh 945; ./read-check.sh 946
+    ../FLAMEGRAPH/111-auth-borrow/ab-auth.sh 947:Y 948:N 949:Y 950:N 951:Y 952:N
+    ../FLAMEGRAPH/111-auth-borrow/prof-both.sh 953 Y
+    ../FLAMEGRAPH/111-auth-borrow/prof-both.sh 954 N
