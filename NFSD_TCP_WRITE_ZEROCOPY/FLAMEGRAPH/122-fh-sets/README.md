@@ -25,3 +25,15 @@ scan of all 48 entries kept 99.8% with no eviction).  Each miss is a full
 decode (about 1.7 us), about 0.03 us a READ: the saving goes back in
 misses.  A slot sees about as many distinct files as it has entries, and
 four ways do not hold them.
+
+## The sets dropped; a tag array instead
+
+Mike: "revert the sets and implement the tag array".  The two commits
+were dropped from the branch by rebase (the tip before is
+`kernel-7.3/canary.pre-drop-fh-sets`).  In their place "NFSD: Scan a tag
+for each borrowed file handle, not the handle": a word a entry, a hash of
+the handle, scanned past the MRU entry, an entry read only on a tag
+match; any entry still takes any handle, so no conflict misses.  48
+tags are three cache lines.  Built into `/var/tmp/svcstack-541-fhtag`
+(nfsd `6C1DB2E1B6B2CC84026E7B1`), W=1 clean.  The KUnit cases stand as
+they were.  One `prof-srv.sh` run (t2-r1027) against t2-r1024.
