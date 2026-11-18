@@ -22,6 +22,7 @@ struct rpc_xprt_switch {
 	unsigned int		xps_nxprts;
 	unsigned int		xps_nactive;
 	unsigned int		xps_nunique_destaddr_xprts;
+	atomic_long_t		xps_queuelen;	/* round-robin policy only */
 	struct rpc_xprt_cpu_map __rcu *xps_cpu_map;
 	struct list_head	xps_xprt_list;
 	struct rpc_xprt_switch_array __rcu *xps_array; /* the list's xprts */
@@ -55,6 +56,7 @@ extern struct rpc_xprt_switch *xprt_switch_get(struct rpc_xprt_switch *xps);
 extern void xprt_switch_put(struct rpc_xprt_switch *xps);
 
 extern void rpc_xprt_switch_set_percpu(struct rpc_xprt_switch *xps);
+extern void rpc_xprt_switch_set_roundrobin(struct rpc_xprt_switch *xps);
 extern void rpc_xprt_numa_assign(struct rpc_xprt *xprt,
 				 struct rpc_xprt_switch *xps);
 extern void rpc_xprt_numa_release(struct rpc_xprt *xprt);

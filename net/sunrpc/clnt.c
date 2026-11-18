@@ -1255,8 +1255,16 @@ EXPORT_SYMBOL_GPL(rpc_bind_new_program);
 struct rpc_xprt *
 rpc_task_get_xprt(struct rpc_clnt *clnt, struct rpc_xprt *xprt)
 {
+	struct rpc_xprt_switch *xps;
+
 	if (!xprt)
 		return NULL;
+	if (!rpc_xprt_nconnect_percpu) {
+		rcu_read_lock();
+		xps = rcu_dereference(clnt->cl_xpi.xpi_xpswitch);
+		atomic_long_inc(&xps->xps_queuelen);
+		rcu_read_unlock();
+	}
 	atomic_long_inc(&xprt->queuelen);
 	return xprt;
 }
@@ -1264,7 +1272,15 @@ rpc_task_get_xprt(struct rpc_clnt *clnt, struct rpc_xprt *xprt)
 static void
 rpc_task_release_xprt(struct rpc_clnt *clnt, struct rpc_xprt *xprt)
 {
+	struct rpc_xprt_switch *xps;
+
 	atomic_long_dec(&xprt->queuelen);
+	if (!rpc_xprt_nconnect_percpu) {
+		rcu_read_lock();
+		xps = rcu_dereference(clnt->cl_xpi.xpi_xpswitch);
+		atomic_long_dec(&xps->xps_queuelen);
+		rcu_read_unlock();
+	}
 	xprt_put(xprt);
 }
 
@@ -2400,6 +2416,8 @@ call_connect_status(struct rpc_task *task)
 
 				xprt_release(task);
 				value = atomic_long_dec_return(&xprt->queuelen);
+				if (!rpc_xprt_nconnect_percpu)
+					atomic_long_dec(&xps->xps_queuelen);
 				if (value == 0)
 					rpc_xprt_switch_remove_xprt(xps, saved,
 								    true);
@@ -3333,7 +3351,10 @@ int rpc_clnt_add_xprt(struct rpc_clnt *clnt,
 				connect_timeout,
 				reconnect_timeout);
 
-	rpc_xprt_switch_set_percpu(xps);
+	if (rpc_xprt_nconnect_percpu)
+		rpc_xprt_switch_set_percpu(xps);
+	else
+		rpc_xprt_switch_set_roundrobin(xps);
 	if (setup) {
 		ret = setup(clnt, xps, xprt, data);
 		if (ret != 0)

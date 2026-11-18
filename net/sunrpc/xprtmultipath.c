@@ -24,6 +24,7 @@
 #include <net/inet_dscp.h>
 #include <net/route.h>
 
+#include "sunrpc.h"
 #include "sysfs.h"
 
 typedef struct rpc_xprt *(*xprt_switch_find_xprt_t)(struct rpc_xprt_switch *xps,
@@ -31,6 +32,19 @@ typedef struct rpc_xprt *(*xprt_switch_find_xprt_t)(struct rpc_xprt_switch *xps,
 
 static const struct rpc_xprt_iter_ops rpc_xprt_iter_singular;
 static const struct rpc_xprt_iter_ops rpc_xprt_iter_percpu;
+static const struct rpc_xprt_iter_ops rpc_xprt_iter_roundrobin;
+
+/*
+ * The policy of an nconnect switch: each CPU its own transport (Y), or
+ * round-robin over the transports, skipping any that holds more than
+ * the switch's average queue (N, the default).  Read when a transport is
+ * added, and the round-robin's queue count is kept only under N, so it
+ * is fixed at load.  xprt_numa_map takes effect only under Y.
+ */
+bool rpc_xprt_nconnect_percpu __read_mostly;
+module_param_named(nconnect_percpu, rpc_xprt_nconnect_percpu, bool, 0444);
+MODULE_PARM_DESC(nconnect_percpu,
+		 "nconnect transports: per-CPU (Y) or balanced round-robin (N, default)");
 static const struct rpc_xprt_iter_ops rpc_xprt_iter_listall;
 static const struct rpc_xprt_iter_ops rpc_xprt_iter_listoffline;
 
@@ -206,6 +220,7 @@ struct rpc_xprt_switch *xprt_switch_alloc(struct rpc_xprt *xprt,
 		INIT_LIST_HEAD(&xps->xps_xprt_list);
 		RCU_INIT_POINTER(xps->xps_array, NULL);
 		xps->xps_iter_ops = &rpc_xprt_iter_singular;
+		atomic_long_set(&xps->xps_queuelen, 0);
 		RCU_INIT_POINTER(xps->xps_cpu_map, NULL);
 		rpc_sysfs_xprt_switch_setup(xps, xprt, gfp_flags);
 		rpc_xprt_numa_assign(xprt, xps);
@@ -282,12 +297,33 @@ struct rpc_xprt_cpu_map {
  * live homes, ties round robin, so a switch's transports take distinct
  * cores and every core of the node is home before any is home to two; a
  * per-CPU switch is then mapped around those homes.  N (the default): the
- * CPU-count split of rpc_xprt_switch_update_cpu_map_locked().
+ * CPU-count split of rpc_xprt_switch_update_cpu_map_locked().  The homes
+ * serve only the per-CPU choice, so Y takes effect only with
+ * nconnect_percpu=Y; under round-robin no transport gets a home and the
+ * xprtrdma CQs are spread as before.
  */
 static bool rpc_xprt_numa_map __read_mostly;
 module_param_named(xprt_numa_map, rpc_xprt_numa_map, bool, 0444);
 MODULE_PARM_DESC(xprt_numa_map,
-		 "LAB ONLY: home nconnect transports on their NIC's NUMA node, one core each, staggered across servers (default N)");
+		 "LAB ONLY: home nconnect transports on their NIC's NUMA node, one core each, staggered across servers; needs nconnect_percpu=Y (default N)");
+
+/* xprt_numa_map=Y with nconnect_percpu=Y: both are fixed at load */
+static bool rpc_xprt_numa_map_on(void)
+{
+	return READ_ONCE(rpc_xprt_numa_map) &&
+	       READ_ONCE(rpc_xprt_nconnect_percpu);
+}
+
+/**
+ * rpc_xprt_numa_map_check - Report an xprt_numa_map=Y that has no effect
+ *
+ * Called once at module load.
+ */
+void rpc_xprt_numa_map_check(void)
+{
+	if (rpc_xprt_numa_map && !rpc_xprt_nconnect_percpu)
+		pr_info("RPC: xprt_numa_map=Y ignored: it needs nconnect_percpu=Y\n");
+}
 
 static DEFINE_SPINLOCK(rpc_xprt_numa_lock);
 static unsigned int rpc_xprt_numa_rotor[MAX_NUMNODES];
@@ -361,8 +397,9 @@ static unsigned int rpc_xprt_numa_switch_homes(struct rpc_xprt_switch *xps,
  * Takes the online core of the node carrying the fewest transports of
  * @xps, then the fewest live homes, ties round robin.  A switch's
  * transports are added one at a time, so they take distinct cores.
- * Process context.  Does nothing if @xprt already has a home, or if the
- * route to its server gives no node.
+ * Process context.  Does nothing unless xprt_numa_map=Y and
+ * nconnect_percpu=Y, if @xprt already has a home, or if the route to its
+ * server gives no node.
  */
 void rpc_xprt_numa_assign(struct rpc_xprt *xprt, struct rpc_xprt_switch *xps)
 {
@@ -372,7 +409,7 @@ void rpc_xprt_numa_assign(struct rpc_xprt *xprt, struct rpc_xprt_switch *xps)
 	const struct cpumask *mask;
 	int node, cpu, best = -1;
 
-	if (!READ_ONCE(rpc_xprt_numa_map) || READ_ONCE(xprt->xprt_numa_home) >= 0)
+	if (!rpc_xprt_numa_map_on() || READ_ONCE(xprt->xprt_numa_home) >= 0)
 		return;
 	node = rpc_xprt_route_node(xprt);
 	if (node < 0 || node >= nr_node_ids)
@@ -439,7 +476,7 @@ int rpc_xprt_numa_comp_vector(const struct rpc_xprt *xprt, int nvec)
 {
 	int pos;
 
-	if (!READ_ONCE(rpc_xprt_numa_map) || nvec <= 0)
+	if (!rpc_xprt_numa_map_on() || nvec <= 0)
 		return -1;
 	pos = rpc_xprt_numa_pos(READ_ONCE(xprt->xprt_numa_home),
 				READ_ONCE(xprt->xprt_numa_node));
@@ -462,7 +499,7 @@ static bool rpc_xprt_switch_numa_map_locked(struct rpc_xprt_cpu_map *map,
 	unsigned int i, k;
 	int cpu, other;
 
-	if (!READ_ONCE(rpc_xprt_numa_map) || node == NUMA_NO_NODE)
+	if (!rpc_xprt_numa_map_on() || node == NUMA_NO_NODE)
 		return false;
 	for (i = 0; i < n; i++)
 		if (READ_ONCE(active[i]->xprt_numa_node) != node ||
@@ -584,6 +621,18 @@ void rpc_xprt_switch_set_percpu(struct rpc_xprt_switch *xps)
 		rpc_xprt_switch_update_cpu_map_locked(xps);
 	}
 	spin_unlock(&xps->xps_lock);
+}
+
+/**
+ * rpc_xprt_switch_set_roundrobin - Set a round-robin policy on rpc_xprt_switch
+ * @xps: pointer to struct rpc_xprt_switch
+ *
+ * Sets a round-robin default policy for iterators acting on xps.
+ */
+void rpc_xprt_switch_set_roundrobin(struct rpc_xprt_switch *xps)
+{
+	if (READ_ONCE(xps->xps_iter_ops) != &rpc_xprt_iter_roundrobin)
+		WRITE_ONCE(xps->xps_iter_ops, &rpc_xprt_iter_roundrobin);
 }
 
 /**
@@ -854,6 +903,37 @@ struct rpc_xprt *xprt_switch_find_next_entry_roundrobin(struct rpc_xprt_switch *
 	return xprt_switch_array_next_roundrobin(xps, cur);
 }
 
+static
+struct rpc_xprt *xprt_switch_find_next_entry_balanced(struct rpc_xprt_switch *xps,
+		const struct rpc_xprt *cur)
+{
+	struct rpc_xprt *xprt;
+	unsigned int nactive;
+
+	for (;;) {
+		unsigned long xprt_queuelen, xps_queuelen;
+
+		xprt = xprt_switch_array_next_roundrobin(xps, cur);
+		if (!xprt)
+			break;
+		xprt_queuelen = atomic_long_read(&xprt->queuelen);
+		xps_queuelen = atomic_long_read(&xps->xps_queuelen);
+		nactive = READ_ONCE(xps->xps_nactive);
+		/* Exit loop if xprt_queuelen <= average queue length */
+		if (xprt_queuelen * nactive <= xps_queuelen)
+			break;
+		cur = xprt;
+	}
+	return xprt;
+}
+
+static
+struct rpc_xprt *xprt_iter_next_entry_roundrobin(struct rpc_xprt_iter *xpi)
+{
+	return xprt_iter_next_entry_multiple(xpi,
+			xprt_switch_find_next_entry_balanced);
+}
+
 /*
  * A CPU that submits far more than its share (one busy job on a quiet
  * mount) spills to the round-robin choice once its own transport holds
@@ -1064,6 +1144,14 @@ const struct rpc_xprt_iter_ops rpc_xprt_iter_percpu = {
 	.xpi_rewind = xprt_iter_default_rewind,
 	.xpi_xprt = xprt_iter_current_entry,
 	.xpi_next = xprt_iter_next_entry_percpu,
+};
+
+/* Policy for round-robin iteration of entries in the rpc_xprt_switch */
+static
+const struct rpc_xprt_iter_ops rpc_xprt_iter_roundrobin = {
+	.xpi_rewind = xprt_iter_default_rewind,
+	.xpi_xprt = xprt_iter_current_entry,
+	.xpi_next = xprt_iter_next_entry_roundrobin,
 };
 
 /* Policy for once-through iteration of entries in the rpc_xprt_switch */

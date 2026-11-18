@@ -54,4 +54,7 @@ struct rpc_stat;
 struct rpc_program;
 void rpc_stat_alloc_version(struct rpc_stat *statp,
 			    const struct rpc_program *program, u32 vers);
+extern bool rpc_xprt_nconnect_percpu;
+void rpc_xprt_numa_map_check(void);
+
 #endif /* _NET_SUNRPC_SUNRPC_H */

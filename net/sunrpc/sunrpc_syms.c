@@ -129,6 +129,7 @@ init_sunrpc(void)
 #endif
 	svc_init_xprt_sock();	/* svc sock transport */
 	init_socket_xprt();	/* clnt sock transport */
+	rpc_xprt_numa_map_check();
 	return 0;
 
 out6:
