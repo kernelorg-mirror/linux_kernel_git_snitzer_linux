@@ -2986,6 +2986,10 @@ static int nfs_net_init(struct net *net)
 
 	nfs_clients_init(net);
 
+	err = rpc_stat_alloc_counts(&nn->rpcstats);
+	if (err)
+		goto err_counts;
+
 	if (!rpc_proc_register(net, &nn->rpcstats)) {
 		err = -ENOMEM;
 		goto err_proc_rpc;
@@ -3000,6 +3004,8 @@ static int nfs_net_init(struct net *net)
 err_proc_nfs:
 	rpc_proc_unregister(net, "nfs");
 err_proc_rpc:
+	rpc_stat_free_counts(&nn->rpcstats);
+err_counts:
 	nfs_clients_exit(net);
 	nfs_exit_keyring(nn);
 	return err;
@@ -3012,6 +3018,7 @@ static void nfs_net_exit(struct net *net)
 	rpc_proc_unregister(net, "nfs");
 	nfs_fs_proc_net_exit(net);
 	nfs_clients_exit(net);
+	rpc_stat_free_counts(&nn->rpcstats);
 	nfs_exit_keyring(nn);
 }
 
