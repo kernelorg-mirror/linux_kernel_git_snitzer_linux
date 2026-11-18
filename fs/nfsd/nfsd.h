@@ -73,6 +73,24 @@ struct nfsd_exp_slot_ent {
 	u8			fsid_type;
 };
 
+/* The most words of a file id a slot keeps; a longer one is not lent. */
+#define NFSD_FH_SLOT_WORDS	6
+
+/*
+ * One decoded file handle: the dentry that file id @fid of type
+ * @fileid_type resolved to under @exp, one of the slot's exports, and
+ * the slot's own reference on it.  Only regular files are kept.
+ */
+struct nfsd_fh_slot_ent {
+	u64			used;		/* the slot's clock at last use */
+	time64_t		last;		/* seconds_since_boot() then */
+	struct svc_export	*exp;		/* compared only; an entry pins it */
+	struct dentry		*dentry;
+	u32			fid[NFSD_FH_SLOT_WORDS];
+	u8			fileid_type;
+	u8			len;		/* words of @fid */
+};
+
 /*
  * The exports an nfsd thread has cached, for NFSv3 requests from an
  * AUTH_SYS or AUTH_NULL client: up to @nr entries, the least recently
@@ -94,6 +112,9 @@ struct nfsd_exp_slot {
 	unsigned int		mru;		/* the entry hit or filled last */
 	u64			clock;		/* bumped on every hit and fill */
 	struct nfsd_exp_slot_ent *ent;
+	unsigned int		nfh;		/* entries in @fh */
+	unsigned int		fh_mru;		/* the file handle hit or filled last */
+	struct nfsd_fh_slot_ent	*fh;		/* decoded handles under @ent's exports */
 	struct list_head	link;
 };
 

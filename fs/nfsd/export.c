@@ -2278,9 +2278,68 @@ module_param_cb(export_borrow_slots, &export_borrow_slots_ops,
 MODULE_PARM_DESC(export_borrow_slots,
 		 "Exports each nfsd thread caches for NFSv3 (0 to 64, 0 disables; read as a thread starts)");
 
+/*
+ * The file handle borrow.  A slot also keeps the dentries of the file
+ * handles it decoded last under its exports: nfsd_set_fh_dentry(), with an
+ * export lent, looks there before exportfs_decode_fh_raw() and on a hit
+ * takes a reference on the kept dentry, so the svc_fh owns its dentry as
+ * before and fh_put() is unchanged; it saves the decode (the file system's
+ * inode lookup, igrab() and d_obtain_alias(), each taking the inode's
+ * locks) and the puts of what it made.
+ *
+ * Only a regular file under a no_subtree_check export that does not sign
+ * its handles is kept: there the decode checks nothing but the handle and
+ * the inode, so the same file id under the same export resolves to the
+ * same dentry while its inode lives.  A hit is the whole file id and the
+ * lent export; it misses, and drops the entry, once the file is unlinked,
+ * which a decode would refuse as stale.  The entries are the slot's, under
+ * its protocol above: an export's entries are dropped before the slot's
+ * reference on that export, so a kept dentry never outlives the mount the
+ * export pins, and a drain drops them all.  An unlinked file's entry would
+ * pin its inode, so entries idle for fh_borrow_ttl seconds are dropped by
+ * a sweep of the idle slots, as the open file cache lets go of idle files.
+ */
+#define NFSD_FH_SLOT_MAX	64
+
+static unsigned int fh_borrow_slots = 16;
+
+static int fh_borrow_slots_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int n;
+	int ret = kstrtouint(val, 0, &n);
+
+	if (ret)
+		return ret;
+	if (n > NFSD_FH_SLOT_MAX)
+		return -EINVAL;
+	WRITE_ONCE(fh_borrow_slots, n);
+	return 0;
+}
+
+static const struct kernel_param_ops fh_borrow_slots_ops = {
+	.set	= fh_borrow_slots_set,
+	.get	= param_get_uint,
+};
+module_param_cb(fh_borrow_slots, &fh_borrow_slots_ops, &fh_borrow_slots, 0644);
+MODULE_PARM_DESC(fh_borrow_slots,
+		 "Decoded NFSv3 file handles each nfsd thread keeps (0 to 64, 0 disables; read as a thread starts)");
+
+static unsigned int fh_borrow_ttl = 2;
+module_param(fh_borrow_ttl, uint, 0644);
+MODULE_PARM_DESC(fh_borrow_ttl,
+		 "Seconds a kept file handle may go unused before it is dropped (at least 1)");
+
 static LIST_HEAD(nfsd_exp_slots);
 static DEFINE_MUTEX(nfsd_exp_slots_mutex);
 static DEFINE_PER_CPU(struct nfsd_exp_borrow_counts, nfsd_exp_borrow_pcpu);
+
+static void nfsd_fh_slots_age(struct work_struct *work);
+static DECLARE_DELAYED_WORK(nfsd_fh_age_work, nfsd_fh_slots_age);
+
+static unsigned int nfsd_fh_ttl(void)
+{
+	return max(READ_ONCE(fh_borrow_ttl), 1U);
+}
 
 /**
  * nfsd_exp_borrow_read_counts - sum the per-CPU export borrow counters
@@ -2302,6 +2361,12 @@ void nfsd_exp_borrow_read_counts(struct nfsd_exp_borrow_counts *c)
 		c->skip += READ_ONCE(p->skip);
 		c->drain += READ_ONCE(p->drain);
 		c->bad_return += READ_ONCE(p->bad_return);
+		c->fh_hit += READ_ONCE(p->fh_hit);
+		c->fh_miss += READ_ONCE(p->fh_miss);
+		c->fh_fill += READ_ONCE(p->fh_fill);
+		c->fh_evict += READ_ONCE(p->fh_evict);
+		c->fh_stale += READ_ONCE(p->fh_stale);
+		c->fh_aged += READ_ONCE(p->fh_aged);
 	}
 }
 
@@ -2333,11 +2398,37 @@ static bool nfsd_exp_entry_fresh(const struct cache_detail *cd,
 	       (flags & BIT(CACHE_PENDING));
 }
 
-/* Drop one entry's references and empty it.  May sleep; the slot is held. */
-static void nfsd_exp_ent_put(struct nfsd_exp_slot_ent *e)
+/* Drop one kept file handle.  May sleep; the slot is held. */
+static void nfsd_fh_ent_put(struct nfsd_fh_slot_ent *f)
 {
-	if (e->exp)
+	if (f->dentry)
+		dput(f->dentry);
+	memset(f, 0, sizeof(*f));
+}
+
+/* Drop the kept file handles under @exp, or every one for NULL. */
+static void nfsd_fh_slot_put(struct nfsd_exp_slot *s,
+			     const struct svc_export *exp)
+{
+	unsigned int i;
+
+	for (i = 0; i < s->nfh; i++)
+		if (s->fh[i].dentry && (!exp || s->fh[i].exp == exp))
+			nfsd_fh_ent_put(&s->fh[i]);
+}
+
+/*
+ * Drop one entry's references and empty it, the file handles kept under
+ * its export first: the export pins their mount.  May sleep; the slot is
+ * held.
+ */
+static void nfsd_exp_ent_put(struct nfsd_exp_slot *s,
+			     struct nfsd_exp_slot_ent *e)
+{
+	if (e->exp) {
+		nfsd_fh_slot_put(s, e->exp);
 		exp_put(e->exp);
+	}
 	if (e->ek)
 		cache_put(&e->ek->h, e->ekcd);
 	memset(e, 0, sizeof(*e));
@@ -2348,8 +2439,9 @@ static void nfsd_exp_slot_put_all(struct nfsd_exp_slot *s)
 {
 	unsigned int i;
 
+	nfsd_fh_slot_put(s, NULL);
 	for (i = 0; i < s->nr; i++)
-		nfsd_exp_ent_put(&s->ent[i]);
+		nfsd_exp_ent_put(s, &s->ent[i]);
 }
 
 /**
@@ -2373,6 +2465,12 @@ void nfsd_exp_slot_init(struct nfsd_exp_slot *s)
 		return;
 	s->nr = nr;
 	s->enabled = true;
+	/* without them only the file handle borrow is off */
+	nr = READ_ONCE(fh_borrow_slots);
+	if (nr)
+		s->fh = kcalloc(nr, sizeof(*s->fh), GFP_KERNEL);
+	if (s->fh)
+		s->nfh = nr;
 }
 
 /**
@@ -2389,6 +2487,10 @@ void nfsd_exp_slot_register(struct nfsd_exp_slot *s)
 		return;
 	mutex_lock(&nfsd_exp_slots_mutex);
 	list_add(&s->link, &nfsd_exp_slots);
+	/* the sweep runs while any slot is registered; a no-op if queued */
+	if (s->nfh)
+		queue_delayed_work(system_dfl_wq, &nfsd_fh_age_work,
+				   nfsd_fh_ttl() * HZ);
 	mutex_unlock(&nfsd_exp_slots_mutex);
 	s->registered = true;
 }
@@ -2523,7 +2625,7 @@ miss:
 	if (victim->exp && !nfsd_exp_ent_match(victim, net, client, fsid_type,
 					       fsidv, klen))
 		this_cpu_inc(nfsd_exp_borrow_pcpu.evict);
-	nfsd_exp_ent_put(victim);
+	nfsd_exp_ent_put(s, victim);
 
 	nn = net_generic(net, nfsd_net_id);
 	ek = exp_find_key(nn->svc_expkey_cache, client, fsid_type, fsidv,
@@ -2606,6 +2708,9 @@ void nfsd_exp_slot_exit(struct nfsd_exp_slot *s)
 	}
 	WARN_ON_ONCE(s->borrowed);
 	nfsd_exp_slot_put_all(s);
+	kfree(s->fh);
+	s->fh = NULL;
+	s->nfh = 0;
 	kfree(s->ent);
 	s->ent = NULL;
 	s->nr = 0;
@@ -2641,6 +2746,175 @@ void nfsd_exp_slots_drain(void)
 		spin_unlock(&s->lock);
 	}
 	mutex_unlock(&nfsd_exp_slots_mutex);
+}
+
+static __always_inline bool
+nfsd_fh_ent_match(const struct nfsd_fh_slot_ent *f,
+		  const struct svc_export *exp, int fileid_type,
+		  const u32 *fid, int len)
+{
+	return f->dentry && f->fid[0] == fid[0] && f->len == len &&
+	       f->fileid_type == fileid_type && f->exp == exp &&
+	       !memcmp(f->fid, fid, len * sizeof(u32));
+}
+
+/**
+ * nfsd_fh_borrow - a kept dentry for a file handle under a lent export
+ * @s: the slot that lent @exp, still held by the caller
+ * @exp: the lent export, no_subtree_check and not signing its handles
+ * @fileid_type: the handle's file id type
+ * @fid: the handle's file id
+ * @len: words of @fid
+ *
+ * Return: the dentry, with a reference for the caller as
+ * exportfs_decode_fh_raw() returns one; NULL on a miss, when the caller
+ * decodes the handle and offers the result to nfsd_fh_borrow_fill().
+ */
+struct dentry *nfsd_fh_borrow(struct nfsd_exp_slot *s,
+			      const struct svc_export *exp, int fileid_type,
+			      const u32 *fid, int len)
+{
+	struct nfsd_fh_slot_ent *f;
+	unsigned int i, idx;
+
+	if (!s->nfh || len <= 0 || len > NFSD_FH_SLOT_WORDS)
+		return NULL;
+	idx = s->fh_mru;
+	f = &s->fh[idx];
+	if (nfsd_fh_ent_match(f, exp, fileid_type, fid, len))
+		goto found;
+	for (i = 0; i < s->nfh; i++) {
+		f = &s->fh[i];
+		if (i != s->fh_mru &&
+		    nfsd_fh_ent_match(f, exp, fileid_type, fid, len)) {
+			idx = i;
+			goto found;
+		}
+	}
+	this_cpu_inc(nfsd_exp_borrow_pcpu.fh_miss);
+	return NULL;
+
+found:
+	/* a decode refuses an unlinked file's handle as stale: so a hit */
+	if (unlikely(!d_inode(f->dentry)->i_nlink)) {
+		nfsd_fh_ent_put(f);
+		this_cpu_inc(nfsd_exp_borrow_pcpu.fh_stale);
+		return NULL;
+	}
+	f->used = ++s->clock;
+	f->last = seconds_since_boot();
+	s->fh_mru = idx;
+	this_cpu_inc(nfsd_exp_borrow_pcpu.fh_hit);
+	return dget(f->dentry);
+}
+
+/**
+ * nfsd_fh_borrow_fill - keep a file handle's decoded dentry in the slot
+ * @s: the slot that lent @exp, still held by the caller
+ * @exp: the lent export, as given to nfsd_fh_borrow()
+ * @fileid_type: the handle's file id type
+ * @fid: the handle's file id
+ * @len: words of @fid
+ * @dentry: what exportfs_decode_fh_raw() returned for it; the caller keeps
+ *	its reference, and the slot takes one of its own
+ *
+ * Only a regular file is kept, in an empty entry or the least recently
+ * used.  May sleep, when the entry it replaces held the last reference.
+ */
+void nfsd_fh_borrow_fill(struct nfsd_exp_slot *s, struct svc_export *exp,
+			 int fileid_type, const u32 *fid, int len,
+			 struct dentry *dentry)
+{
+	struct nfsd_fh_slot_ent *f, *victim = NULL;
+	unsigned int i;
+
+	if (!s->nfh || len <= 0 || len > NFSD_FH_SLOT_WORDS ||
+	    !d_is_reg(dentry))
+		return;
+	for (i = 0; i < s->nfh; i++) {
+		f = &s->fh[i];
+		if (!f->dentry) {
+			victim = f;
+			break;
+		}
+		if (!victim || f->used < victim->used)
+			victim = f;
+	}
+	if (victim->dentry) {
+		this_cpu_inc(nfsd_exp_borrow_pcpu.fh_evict);
+		nfsd_fh_ent_put(victim);
+	}
+	victim->exp = exp;
+	victim->dentry = dget(dentry);
+	memcpy(victim->fid, fid, len * sizeof(u32));
+	victim->len = len;
+	victim->fileid_type = fileid_type;
+	victim->used = ++s->clock;
+	victim->last = seconds_since_boot();
+	s->fh_mru = victim - s->fh;
+	this_cpu_inc(nfsd_exp_borrow_pcpu.fh_fill);
+}
+
+/*
+ * The sweep: every fh_borrow_ttl seconds while any slot is registered,
+ * each idle slot is claimed as a drain claims it, and its kept file
+ * handles unused for @ttl seconds at @now, or whose file is unlinked, are
+ * dropped.  A slot in use is left to the next sweep.  Under
+ * nfsd_exp_slots_mutex, so it never runs beside a drain.  Returns whether
+ * any slot is still registered.
+ */
+static bool nfsd_fh_slots_sweep(time64_t now, unsigned int ttl)
+{
+	struct nfsd_fh_slot_ent *f;
+	struct nfsd_exp_slot *s;
+	unsigned int i;
+	bool more;
+
+	mutex_lock(&nfsd_exp_slots_mutex);
+	list_for_each_entry(s, &nfsd_exp_slots, link) {
+		if (!s->nfh)
+			continue;
+		spin_lock(&s->lock);
+		if (s->borrowed) {
+			spin_unlock(&s->lock);
+			continue;
+		}
+		s->borrowed = true;
+		spin_unlock(&s->lock);
+		for (i = 0; i < s->nfh; i++) {
+			f = &s->fh[i];
+			if (f->dentry && (now - f->last >= ttl ||
+					  !d_inode(f->dentry)->i_nlink)) {
+				nfsd_fh_ent_put(f);
+				this_cpu_inc(nfsd_exp_borrow_pcpu.fh_aged);
+			}
+		}
+		spin_lock(&s->lock);
+		s->borrowed = false;
+		spin_unlock(&s->lock);
+	}
+	more = !list_empty(&nfsd_exp_slots);
+	mutex_unlock(&nfsd_exp_slots_mutex);
+	return more;
+}
+
+static void nfsd_fh_slots_age(struct work_struct *work)
+{
+	unsigned int ttl = nfsd_fh_ttl();
+
+	/* a slot registered meanwhile queues the work itself */
+	if (nfsd_fh_slots_sweep(seconds_since_boot(), ttl))
+		queue_delayed_work(system_dfl_wq, &nfsd_fh_age_work, ttl * HZ);
+}
+
+/**
+ * nfsd_exp_borrow_shutdown - stop the file handle sweep as nfsd unloads
+ *
+ * Every slot is gone by then, so the sweep does not queue itself again.
+ */
+void nfsd_exp_borrow_shutdown(void)
+{
+	cancel_delayed_work_sync(&nfsd_fh_age_work);
 }
 
 struct svc_export *

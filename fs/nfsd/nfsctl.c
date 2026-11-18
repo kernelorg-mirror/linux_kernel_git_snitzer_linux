@@ -3211,6 +3211,7 @@ static void __exit exit_nfsd(void)
 	nfsd_drc_slab_free();
 	nfsd_lockd_shutdown();
 	nfsd4_exit_pnfs();
+	nfsd_exp_borrow_shutdown();
 	nfsd_debugfs_exit();
 	nfsd4_free_slabs();
 }

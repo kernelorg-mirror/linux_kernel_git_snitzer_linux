@@ -142,6 +142,13 @@ void			nfsd_exp_slot_init(struct nfsd_exp_slot *slot);
 void			nfsd_exp_slot_register(struct nfsd_exp_slot *slot);
 void			nfsd_exp_slot_exit(struct nfsd_exp_slot *slot);
 void			nfsd_exp_slots_drain(void);
+struct dentry *nfsd_fh_borrow(struct nfsd_exp_slot *slot,
+			      const struct svc_export *exp, int fileid_type,
+			      const u32 *fid, int len);
+void nfsd_fh_borrow_fill(struct nfsd_exp_slot *slot, struct svc_export *exp,
+			 int fileid_type, const u32 *fid, int len,
+			 struct dentry *dentry);
+void nfsd_exp_borrow_shutdown(void);
 
 /* Per-CPU sums of the export borrow counters (debugfs export_borrow). */
 struct nfsd_exp_borrow_counts {
@@ -152,6 +159,12 @@ struct nfsd_exp_borrow_counts {
 	unsigned long	skip;		/* ineligible or already borrowed */
 	unsigned long	drain;		/* slot drains */
 	unsigned long	bad_return;	/* return without a borrow (WARN) */
+	unsigned long	fh_hit;		/* a file handle's dentry lent */
+	unsigned long	fh_miss;	/* an eligible handle not kept */
+	unsigned long	fh_fill;	/* a decoded handle kept */
+	unsigned long	fh_evict;	/* a fill that dropped a kept one */
+	unsigned long	fh_stale;	/* a kept handle's file unlinked */
+	unsigned long	fh_aged;	/* kept handles idle past the ttl */
 };
 
 void			nfsd_exp_borrow_read_counts(struct nfsd_exp_borrow_counts *c);

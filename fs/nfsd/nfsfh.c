@@ -242,6 +242,7 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 	struct svc_export *exp;
 	struct nfsd_exp_slot *slot = NULL;
 	struct dentry *dentry;
+	bool lend_fh;
 	int fileid_type;
 	int data_left = fh->fh_size/4;
 	int len;
@@ -341,9 +342,25 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct net *net,
 			data_left -= FH_MAC_WORDS;
 		}
 
-		dentry = exportfs_decode_fh_raw(exp->ex_path.mnt, fid,
-						data_left, fileid_type, 0,
-						nfsd_acceptable, exp);
+		/*
+		 * A lent export's slot keeps the dentries of the regular files
+		 * it decoded last; where the decode checks only the handle and
+		 * the inode (no_subtree_check, unsigned), a hit stands for it.
+		 */
+		lend_fh = slot && (exp->ex_flags & NFSEXP_NOSUBTREECHECK) &&
+			  !(exp->ex_flags & NFSEXP_SIGN_FH);
+		dentry = lend_fh ? nfsd_fh_borrow(slot, exp, fileid_type,
+						  fid->raw, data_left) : NULL;
+		if (!dentry) {
+			dentry = exportfs_decode_fh_raw(exp->ex_path.mnt, fid,
+							data_left, fileid_type,
+							0, nfsd_acceptable,
+							exp);
+			if (lend_fh && !IS_ERR_OR_NULL(dentry))
+				nfsd_fh_borrow_fill(slot, exp, fileid_type,
+						    fid->raw, data_left,
+						    dentry);
+		}
 		if (IS_ERR_OR_NULL(dentry)) {
 			trace_nfsd_set_fh_dentry_badhandle(rqstp, fhp,
 					dentry ?  PTR_ERR(dentry) : -ESTALE);
