@@ -620,3 +620,8 @@ IOPS** (1.75 / 1.79 M a port), p99 4.01 / 3.49 ms, 15.37 us of the
 server's CPU and 11.80 us of the client's a READ, no new kernel
 warning; t2-r1120 on the same stack read 3.63 M, the tip's per-CPU
 stack 3.48 to 3.57 M.
+
+Again (Mike: "run the 4K IOPS test again"): t2-r1125 **3.51 M IOPS**
+(1.76 / 1.75 M), p99 3.33 / 3.42 ms, 16.05 / 11.90 us of CPU a READ,
+no new kernel warning.  The same modules as t2-r1120 byte for byte, so
+3.51 to 3.63 M is the spread from run to run on this stack.
