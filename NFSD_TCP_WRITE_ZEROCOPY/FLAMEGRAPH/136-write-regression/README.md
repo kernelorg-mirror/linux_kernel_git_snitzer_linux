@@ -244,3 +244,26 @@ symlink.c 2).  sunrpc, lockd and nfs_common built.  Adapted for the
 build only, in the client's copy, with no change in behaviour: every
 `struct mnt_idmap *` not already const in `fs/nfs/*.[ch]` and
 `include/linux/nfs*.h` becomes `const struct mnt_idmap *`.
+
+### Result (18 November, 19:55 to 20:01): the regression is in the NFS client modules
+
+With every `mnt_idmap` const, 469's stack built: 17 modules, sunrpc
+srcversion `AB674CEE87351D814F68CEE`, build 469's own; nfs
+`FEF25C30FDC0440C289BE11`.  Loaded on build 541's kernel with
+`cswap131.sh` (client side), rpciod unbound as on 469; the runs held
+with `EXP_CLI_WQ="rpciod/per_cpu=0"`.
+
+| Run | Kernel | NFS client modules | WRITE GB/s | p99 a / b (ms) | RPCs waiting to send t6 / t9 / t12 | A transport at t9: min / median / max |
+|---|---|---|---|---|---|---|
+| t2-r1079 | build 469 | build 469's | 77.70 | 83 / 84 | 2,825 / 2,944 / 2,973 | 85 / ~90 / 102 |
+| t2-r1080, r1082, r1085, r1087 | build 541 | the tip's | 74.50 to 74.89 | 152 to 163 | about 4,000 to 5,200 | about 30 / 130 / 300 |
+| **t2-r1089** | **build 541** | **build 469's** | **77.81** | **81 / 81** | **3,005 / 3,086 / 3,203** | **89 / 95 / 107** |
+| **t2-r1090** | **build 541** | **build 469's** | **77.79** | **82 / 83** | **3,018 / 3,008 / —** | **87 / 93 / 112** |
+
+Both PASS, no drive stepped down, no new kernel warning.  **Build 541's
+kernel writes 77.8 with build 469's NFS client modules**: the core
+kernel between 7.3.0-rc7 and 7.3.3 (TCP, mm, block, the scheduler) is
+cleared, and the whole 3 GB/s is in what sunrpc and nfs changed
+between build 469 and the tip.  The per-CPU transport choice and rpciod
+per-CPU, each taken out alone above, are not it; another commit, or
+several together, is.  The client is back on build 541's stack.
