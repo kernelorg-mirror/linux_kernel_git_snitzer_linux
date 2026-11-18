@@ -507,3 +507,19 @@ transport policy of an nconnect switch as a sunrpc parameter, the
 per-CPU choice or round-robin with its queue-length balancing restored
 as it was before `5555163d661a0`; WRITE, READ and IOPS on each, and the
 default set to what measures best.
+
+The READ pass with the balanced choice, t2-r1108: **80.96 GB/s, PASS**.
+The chain was stopped as its first IOPS run set up (t2-r1109, kept as
+`t2-r1109.aborted`); nothing was left running or mounted.
+
+### The policy parameter (plan)
+
+`e42020cc5e247`, "SUNRPC: Let nconnect use the balanced round-robin
+with nconnect_percpu=N" (W=1 clean): sunrpc's `nconnect_percpu`
+(default Y, fixed at load).  N gives an nconnect switch the
+round-robin policy again with its queue-length balancing and the
+switch's `xps_queuelen` (counted only under N), as before
+`5555163d661a0`; no transport then has a home CPU, so the receive work
+is queued where the data arrives.  `ab-policy.sh`: N then Y, each with
+the WRITE pass, the READ pass and 4 KiB IOPS at iodepth 96 (t2-r1112
+to r1117).
