@@ -123,3 +123,37 @@ The plan:
     ../FLAMEGRAPH/111-auth-borrow/ab-auth.sh 947:Y 948:N 949:Y 950:N 951:Y 952:N
     ../FLAMEGRAPH/111-auth-borrow/prof-both.sh 953 Y
     ../FLAMEGRAPH/111-auth-borrow/prof-both.sh 954 N
+
+## The CACHE_PENDING fix did not close the gap (01:05 to 01:17)
+
+On `/var/tmp/svcstack-541-pending/stack`:
+
+| Run | | Result | ip_map hits / fills | gid hits / fills |
+|---|---|---|---|---|
+| t2-r945 | WRITE pass | 74.52 GB/s, RERUN | 5.07 M / 181 | 5.07 M / 98 |
+| t2-r946 | READ pass | **79.83 GB/s, PASS** | 18.46 M / 504 | 8.48 M / 9.98 M |
+| t2-r947 | IOPS, svcauth_borrow Y | 2.54 M (1.27 / 1.27), 1.21 / 4.42 ms, server 72% (93%), client 71% (79%) | 67.69 M / 2,620 | 44.98 M / 22.72 M |
+
+The gid gap was the same: with manage-gids off mountd does not listen on
+the auth.unix.gid channel at all, so cache_check() finds no reader,
+clears `CACHE_PENDING` at once, and the entry ages to its expiry with no
+refresh ever pending.  The A/B was stopped after t2-r947, whose run
+finished on its own.
+
+`9fbe6e9f4ef99` "SUNRPC: Lend an aged auth cache entry with no refresh
+listener": each entry keeps the second a lookup last checked it; past
+half its age an entry checked this second is lent too, so one call a
+second goes through to cache_check() (which starts a refresh whenever
+a listener can take it) and the rest are lent the entry.  Its suite
+case is `4cd2db18dfc8a` (`sab_half_age_no_listener`).  Built into
+`/var/tmp/svcstack-541-checked/stack` (sunrpc `E221A34ED597178925B8BD3`,
+nfsd `DC178C9D921DD1CDFF947D7`), no warning at W=1.  The plan:
+
+    cd xeu-rig
+    STACK=/var/tmp/svcstack-541-checked/stack SUNRPC_KO=none \
+        ./step.sh /var/tmp/zc-run-logs/541 swap-checked ./swap-sunrpc.sh
+    ./settled.sh apply
+    ./write-check.sh 955; ./read-check.sh 956
+    ../FLAMEGRAPH/111-auth-borrow/ab-auth.sh 957:Y 958:N 959:Y 960:N 961:Y 962:N
+    ../FLAMEGRAPH/111-auth-borrow/prof-both.sh 963 Y
+    ../FLAMEGRAPH/111-auth-borrow/prof-both.sh 964 N
