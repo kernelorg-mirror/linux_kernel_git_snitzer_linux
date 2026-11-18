@@ -174,6 +174,25 @@ extern void svcauth_unix_purge(struct net *net);
 extern void svcauth_unix_info_release(struct svc_xprt *xpt);
 extern enum svc_auth_status svcauth_unix_set_client(struct svc_rqst *rqstp);
 extern void svcauth_unix_borrow_free(struct svc_rqst *rqstp);
+#if IS_ENABLED(CONFIG_KUNIT)
+struct in6_addr;
+struct net;
+struct auth_ops *svcauth_unix_kunit_ops(u32 flavour);
+struct cache_detail *svcauth_unix_kunit_cache_create(struct net *net, bool gid);
+struct cache_head *svcauth_unix_kunit_ip_map_set(struct cache_detail *cd,
+						 char *class,
+						 struct in6_addr *addr,
+						 struct auth_domain *dom,
+						 time64_t expiry);
+struct cache_head *svcauth_unix_kunit_gid_set(struct cache_detail *cd,
+					      kuid_t uid,
+					      struct group_info *gi,
+					      time64_t expiry);
+struct auth_domain *svcauth_unix_kunit_ip_map_domain(struct cache_head *h);
+struct group_info *svcauth_unix_kunit_gid_groups(struct cache_head *h);
+void svcauth_unix_kunit_borrow_enable(bool on);
+void svcauth_unix_kunit_borrow_counts(unsigned long c[4]);
+#endif
 
 extern int unix_gid_cache_create(struct net *net);
 extern void unix_gid_cache_destroy(struct net *net);

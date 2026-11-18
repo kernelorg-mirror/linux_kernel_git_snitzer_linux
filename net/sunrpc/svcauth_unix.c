@@ -6,6 +6,7 @@
 #include <linux/sunrpc/xdr.h>
 #include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/svcauth.h>
+#include <kunit/visibility.h>
 #include <linux/sunrpc/gss_api.h>
 #include <linux/sunrpc/addr.h>
 #include <linux/err.h>
@@ -1227,6 +1228,116 @@ void svcauth_unix_borrow_free(struct svc_rqst *rqstp)
 	kfree(b);
 	rqstp->rq_auth_borrow = NULL;
 }
+EXPORT_SYMBOL_IF_KUNIT(svcauth_unix_borrow_free);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/*
+ * For the KUnit suites: the AUTH_SYS ops, caches made from this file's
+ * templates on a test net, entries set as mountd's downcalls set them,
+ * and the borrow's switch and counters.
+ */
+VISIBLE_IF_KUNIT struct auth_ops *svcauth_unix_kunit_ops(u32 flavour)
+{
+	return flavour == RPC_AUTH_NULL ? &svcauth_null : &svcauth_unix;
+}
+EXPORT_SYMBOL_IF_KUNIT(svcauth_unix_kunit_ops);
+
+static const struct cache_detail ip_map_cache_template;
+
+VISIBLE_IF_KUNIT struct cache_detail *
+svcauth_unix_kunit_cache_create(struct net *net, bool gid)
+{
+	return cache_create_net(gid ? &unix_gid_cache_template :
+				      &ip_map_cache_template, net);
+}
+EXPORT_SYMBOL_IF_KUNIT(svcauth_unix_kunit_cache_create);
+
+/* Set (@class, @addr) to @dom, or negative for NULL; returns it, held. */
+VISIBLE_IF_KUNIT struct cache_head *
+svcauth_unix_kunit_ip_map_set(struct cache_detail *cd, char *class,
+			      struct in6_addr *addr, struct auth_domain *dom,
+			      time64_t expiry)
+{
+	struct ip_map *ipm = __ip_map_lookup(cd, class, addr);
+
+	if (!ipm)
+		return NULL;
+	/* the update consumes the lookup's reference, as in ip_map_parse() */
+	if (__ip_map_update(cd, ipm,
+			    dom ? container_of(dom, struct unix_domain, h) : NULL,
+			    expiry))
+		return NULL;
+	ipm = __ip_map_lookup(cd, class, addr);
+	return ipm ? &ipm->h : NULL;
+}
+EXPORT_SYMBOL_IF_KUNIT(svcauth_unix_kunit_ip_map_set);
+
+/* Set @uid's groups to @gi, or negative for NULL; returns it, held. */
+VISIBLE_IF_KUNIT struct cache_head *
+svcauth_unix_kunit_gid_set(struct cache_detail *cd, kuid_t uid,
+			   struct group_info *gi, time64_t expiry)
+{
+	struct unix_gid ug = { .uid = uid }, *ugp;
+	struct cache_head *ch;
+
+	ug.gi = gi ? get_group_info(gi) : groups_alloc(0);
+	if (!ug.gi)
+		return NULL;
+	ugp = unix_gid_lookup(cd, uid);
+	if (!ugp)
+		goto out;
+	ug.h.flags = 0;
+	if (!gi)
+		set_bit(CACHE_NEGATIVE, &ug.h.flags);
+	ug.h.expiry_time = expiry;
+	ch = sunrpc_cache_update(cd, &ug.h, &ugp->h, unix_gid_hash(uid));
+	if (ch)
+		cache_put(ch, cd);
+out:
+	put_group_info(ug.gi);
+	ugp = unix_gid_lookup(cd, uid);
+	return ugp ? &ugp->h : NULL;
+}
+EXPORT_SYMBOL_IF_KUNIT(svcauth_unix_kunit_gid_set);
+
+VISIBLE_IF_KUNIT struct auth_domain *
+svcauth_unix_kunit_ip_map_domain(struct cache_head *h)
+{
+	return &container_of(h, struct ip_map, h)->m_client->h;
+}
+EXPORT_SYMBOL_IF_KUNIT(svcauth_unix_kunit_ip_map_domain);
+
+VISIBLE_IF_KUNIT struct group_info *
+svcauth_unix_kunit_gid_groups(struct cache_head *h)
+{
+	return container_of(h, struct unix_gid, h)->gi;
+}
+EXPORT_SYMBOL_IF_KUNIT(svcauth_unix_kunit_gid_groups);
+
+VISIBLE_IF_KUNIT void svcauth_unix_kunit_borrow_enable(bool on)
+{
+	WRITE_ONCE(svcauth_borrow, on);
+}
+EXPORT_SYMBOL_IF_KUNIT(svcauth_unix_kunit_borrow_enable);
+
+/* The counters' sums: ipm_hit, ipm_fill, ug_hit, ug_fill. */
+VISIBLE_IF_KUNIT void svcauth_unix_kunit_borrow_counts(unsigned long c[4])
+{
+	int cpu;
+
+	c[0] = c[1] = c[2] = c[3] = 0;
+	for_each_possible_cpu(cpu) {
+		const struct svcauth_borrow_counts *p =
+			per_cpu_ptr(&svcauth_borrow_pcpu, cpu);
+
+		c[0] += READ_ONCE(p->ipm_hit);
+		c[1] += READ_ONCE(p->ipm_fill);
+		c[2] += READ_ONCE(p->ug_hit);
+		c[3] += READ_ONCE(p->ug_fill);
+	}
+}
+EXPORT_SYMBOL_IF_KUNIT(svcauth_unix_kunit_borrow_counts);
+#endif
 
 /* Drop the call's domain and group_info unless the rqst's cache lent them. */
 static void svcauth_unix_put_client(struct svc_rqst *rqstp)
