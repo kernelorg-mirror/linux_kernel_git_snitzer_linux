@@ -33,9 +33,13 @@ warning.  No KUnit case: the rtc suite is not to be run on tardis2.
     ./write-check.sh 1007; ./read-check.sh 1008
     ../FLAMEGRAPH/120-send-more/ab-more.sh 1009:Y 1010:N 1011:Y 1012:N 1013:Y 1014:N
     EXP_RTC_SEND_MORE=Y ../FLAMEGRAPH/113-server-per-read/prof-srv.sh 1015
+    EXP_RTC_SEND_MORE=Y ./read-check.sh 1016; ./settled.sh apply
 
 The passes at N (the setting at rest); the A/B under `settled-iops.sh`
 (the spill at weight 1, the three borrows); then round 119's profile with
-it Y, for the per-READ breakdown beside round 119's.  Segments out a
+it Y, for the per-READ breakdown beside round 119's.  Then a READ pass
+with it Y (Mike: "yes, add a READ pass with send_more Y after the A/B"):
+the passes at N show the change costs nothing off, this one what it does
+to 1 MiB READs, whose replies the FIFO also sends.  Segments out a
 reply (TcpOutSegs over the replies sent) is the batching's own measure:
 about 1 now.
