@@ -593,7 +593,9 @@ declare -A CLI_DEV=([a]=ens3np0 [b]=ens6np0)	# the client's end of each port
 # GB/s against 77.8 on 469 (WRITE.md).  twoport.sh holds xprtiod strict
 # (and leaves it so), and for a run sets the workqueue scope to numa and
 # stops irqbalance, putting both back after: at rest they read as below.
-# EXP_CLI_KERNEL holds a run to another client kernel.
+# EXP_CLI_KERNEL holds a run to another client kernel, and EXP_CLI_WQ
+# ("rpciod/per_cpu=0 ...") its workqueues to what that kernel has
+# (build 469's rpciod is not per-CPU: FLAMEGRAPH round 136).
 CLI_KERNEL=7.3.3-16.hs.541.canary.el9.x86_64
 CLI_CMDLINE="idle=poll processor.max_cstate=1 intel_idle.max_cstate=0 iommu=off selinux=0"
 declare -A CLI_MOD=([sunrpc/xprt_numa_map]=Y [nfs/nowait_writable]=N)
@@ -882,7 +884,9 @@ audit_client() {	# read only: nothing on the client is changed from here
 	for k in $CLI_CMDLINE; do [[ " $cl " == *" $k "* ]] || miss="$miss $k"; done
 	want "client kernel command line" "${miss:+missing$miss}${miss:-has $CLI_CMDLINE}" "has $CLI_CMDLINE"
 	for k in $(printf '%s\n' "${!CLI_WQ[@]}" | sort); do
-		want "client workqueue $k" "$(awk -v k=wq_$k '$1 == k {print $2}' <<< "$out")" "${CLI_WQ[$k]}"
+		local w=${CLI_WQ[$k]} e
+		for e in ${EXP_CLI_WQ:-}; do [ "${e%%=*}" = "$k" ] && w=${e#*=}; done
+		want "client workqueue $k" "$(awk -v k=wq_$k '$1 == k {print $2}' <<< "$out")" "$w"
 	done
 	for k in $(printf '%s\n' "${!CLI_MOD[@]}" | sort); do
 		local v; v=$(awk -v k=mod_$k '$1 == k {print $2}' <<< "$out")

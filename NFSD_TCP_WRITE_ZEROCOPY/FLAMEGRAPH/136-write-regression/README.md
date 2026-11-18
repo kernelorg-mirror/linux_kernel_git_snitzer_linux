@@ -80,3 +80,30 @@ warning; fio's completion 57 ms mean, 156 ms p99.  Raw perf data:
   backlog: about 5 in flight a transport, 130 queued behind them.
 - nstat: this run's files have the counters since boot (`nstat -a`, a
   mistake); `prof-write.sh` now writes the deltas since second 4.
+
+## Build 469's client (Mike rebooted it at about 18:28)
+
+The one-shot entry was set with `grub2-reboot`; this grub saves the
+entry it boots, so `saved_entry` is now 469 too, and goes back to 541
+with `grub2-set-default` when the round wants it.
+
+- `uname -r` 7.3.0-0.rc7.2.hs.469.el9.x86_64, the same command line as
+  541's; no NFS mounted; both ports answer (0.049 and 0.039 ms).
+- **The two client patches** (Mike: "469 should have the 2
+  patches/client/patches applied via updates/ please verify"): sunrpc
+  is loaded from `updates/sunrpc.ko`, srcversion
+  `AB674CEE87351D814F68CEE`, the build in the client's
+  `/root/zc-csunrpc/C`, whose source has both: 0001's `WQ_SYSFS` on
+  rpciod and xprtiod (`sched.c` 1333, 1337; both in
+  `/sys/devices/virtual/workqueue/`) and 0002's splice (`socklib.c`'s
+  splice flag through `xprt_send_pagedata()`, `xprtsock.c` 1146 setting
+  `MSG_SPLICE_PAGES`).
+- **The client audit**: two BAD, both what build 469 is: the kernel,
+  and `rpciod/per_cpu` 0 (per-CPU rpciod, `ccaaf769083fe`, is one of
+  the commits it lacks).  `settled.sh` takes `EXP_CLI_WQ` now, as it
+  took `EXP_CLI_KERNEL`, and the runs on 469 are held with
+  `EXP_CLI_KERNEL=7.3.0-0.rc7.2.hs.469.el9.x86_64
+  EXP_CLI_WQ="rpciod/per_cpu=0"`: with them the audit reads the
+  settled setting.
+
+Then `write-check.sh 1078` and `prof-write.sh 1079`.
