@@ -6674,6 +6674,16 @@ static int svc_tcp_sendmsg(struct svc_sock *svsk, struct svc_rqst *rqstp,
 		ret = svc_tcp_sendmsg_rx_region(svsk, rqstp, 1 + count);
 		goto out;
 	}
+	/*
+	 * The rtc FIFO has another reply after this one: leave a partial
+	 * segment for it to join, while an ACK is due to push it (the
+	 * socket is TCP_NODELAY).  Not under kTLS, which would hold the
+	 * record open.
+	 */
+	if (rqstp && test_bit(RQ_SEND_MORE, &rqstp->rq_flags) &&
+	    !test_bit(XPT_TLS_SESSION, &svsk->sk_xprt.xpt_flags) &&
+	    READ_ONCE(tcp_sk(svsk->sk_sk)->packets_out))
+		msg.msg_flags |= MSG_MORE;
 	iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, svsk->sk_bvec,
 		      1 + count, sizeof(marker) + xdr->len);
 	ret = sock_sendmsg(svsk->sk_sock, &msg);
