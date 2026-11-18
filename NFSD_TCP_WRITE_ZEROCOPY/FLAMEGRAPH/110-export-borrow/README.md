@@ -79,3 +79,70 @@ bad_return, 48 drains a run (the restarts' cache flushes).
   is at 93 to 99% on both sides: the limit is elsewhere, and what the
   borrow saves is not on it.  A profile at 16 and at 0 (`prof-borrow.sh`,
   t2-r929 and r930) is to show what that limit is and what a hit costs.
+
+### Profiles at 16 and 0 (18 November, 00:00 to 00:04)
+
+`prof-borrow.sh 929 16`, then `930 0`; reports in
+`/var/tmp/zc-run-logs/t2-r929/` and `t2-r930/` (`prof-srv-*.txt`), the
+data in `/dev/shm/zc-p110-929.data` and `-930.data`.
+
+**t2-r929's IOPS (1.51 M) are not a result: port b's transmit queue 0
+hung.**  At 00:00:08 `xeu 0000:a4:00.0 enp164s0f0: NETDEV WATCHDOG:
+CPU: 31: transmit queue 0 timed out 5720 ms`, then `Tx timeout`; at
+00:00:12 port a's firmware mailbox timed out (`RM message [a1:00.0]
+send timed out ... XSL_MSG_EU_RX_PORT_CNTRS_GET failed, error: 110`).
+Just before, perf lowered its rate ("interrupt took too long"), and
+sysstat-collect took 10 s of CPU.  The run's per-second sampler
+stopped for 11 s (00:00:01 to :12) and the client's READs stalled from
+about :06.  Both ports pinged after it, and t2-r930 ran at 2.46 M.  It
+is the first transmit timeout in this tree's records, and in the
+kernel journal since 1 November.  nfs4k.sh's "new kernel warnings 0"
+missed it: its filter matches neither `NETDEV WATCHDOG` nor `Tx
+timeout`.  The perf window (23:59:47 to :55) ended before the queue
+stuck (from about 00:00:02), with the wire steady through it, so the
+profile itself stands.
+
+**What a hit costs, against the lookup it replaces** (share of all
+server samples):
+
+| | slots 16 (t2-r929) | slots 0 (t2-r930) |
+|---|---|---|
+| `fh_verify`, with children | 6.45% | 8.50% |
+| `rqst_exp_find` (exp_find_key, exp_get_by_name, cache_check), with children | not called | 3.02% |
+| `nfsd_exp_borrow`, self | 0.48% | 0.21% (the skip) |
+| `nfsd_exp_ent_match`, self | 0.40% | not called |
+| `fh_put`, with children | 0.72% | 0.88% |
+| `sunrpc_cache_lookup_rcu`, with children | 1.20% (auth caches) | 3.43% |
+| swapper (idle) | 18.34% | 17.98% |
+
+- **A hit costs about 0.9% (borrow and scan) where the lookup cost
+  3.0%, and fh_verify drops by 2.05 points.**  The complexity does
+  not negate the hit rate, but half of a hit is the scan:
+  `nfsd_exp_ent_match()` is an out-of-line call for each entry looked
+  at, about 4.5 a hit with eight exports.  Checking the most recently
+  used entry first and inlining the match would cut most of it.
+- **The saving does not reach IOPS or idle time** (18.3% against
+  18.0%, 2.46 to 2.48 M on both sides): the cycles fh_verify no longer
+  takes are taken up elsewhere.
+
+**What the server spends at 16** (with children, of all samples; the
+48 work CPUs 8-55 evenly loaded, 1.77% of samples each):
+
+- receive and transmit softirqs 23.6% (NAPI 16.3%);
+- sending the replies 16.6% (`svc_tcp_send_record` to `tcp_sendmsg`,
+  one 4 KiB reply a send);
+- receiving the calls: `svc_xprt_recv_call` 12.0%, `svc_tcp_recvfrom`
+  10.1%;
+- the READ itself 11.7% (`nfsd_rtc_read_file`: XFS direct read 10.8%,
+  block submit 5.2%);
+- per-call cache lookups: `nfsd_file_lookup_cached` 7.4% (with
+  `fh_verify` 6.5% in it, of which `exportfs_decode_fh_raw` 3.7%), and
+  `svc_set_client` 4.1% (`svcauth_unix_set_client` 3.7%, 1.8% self:
+  the ip_map and unix_gid caches, looked up and referenced on every
+  call, the same shape as the export lookup the borrow removed);
+- `_raw_spin_lock` 4.0% across callers.
+
+Candidates for the next round, none of them started: the auth caches'
+per-call lookup (`svcauth_unix_set_client`) borrowed per thread as the
+export now is; the dentry decode under `nfsd_set_fh_dentry`; the reply
+send's cost per 4 KiB.
