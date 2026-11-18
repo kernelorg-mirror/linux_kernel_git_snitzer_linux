@@ -50,3 +50,28 @@ Queued after round 120's WRITE rerun (t2-r1017):
 The IOPS runs under `settled-iops.sh` as held (the spill, send_more Y,
 the three borrows).  The two profiles give `__svcxdr_encode_post_op_attr`
 in us a READ, new against old.
+
+## What ran, and the result (18 November, 07:13 to 07:37)
+
+WRITE pass t2-r1018: PASS, 74.69 GB/s.  Mike then waived the passes for
+this change ("Its clearly just a net win"); the READ pass t2-r1019 was
+stopped in its rest, before any load.
+
+| Runs | Change | M IOPS | p99 (ms) |
+|---|---|---|---|
+| t2-r1020, r1022 | on | 2.76, 2.75 | 3.0 to 3.8 |
+| t2-r1021, r1023 | off | 2.71, 2.74 | 3.3 to 3.7 |
+
+The profiles: `__svcxdr_encode_post_op_attr` 2.14% at 2.71 M with the
+change (t2-r1024), **0.51 us a READ**, against 2.58% at 2.69 M without
+(t2-r1025), **0.61 us**: about 0.1 us saved, `xfs_vn_getattr` falling
+from 0.58% to under the report's 0.3% floor.  `security_inode_getattr`
+is the same (0.59%, 0.53%).  No new kernel warning.
+
+Mike: "this was all overkill" for a plain micro-optimization.  The A/B
+switch (`DROP: NFSD: A/B switch for FLAMEGRAPH round 121`) was dropped
+from the branch at once by rebase (Mike: "just revert the DROP
+immediately ... Its ok to forcibly rebase"); the tip before is
+`kernel-7.3/canary.pre-drop-attr-ab`.  The running nfsd still has the
+switch, at N, until its next swap.  The cached attributes are a MAYBE
+TODO in `IOPS.md`.
