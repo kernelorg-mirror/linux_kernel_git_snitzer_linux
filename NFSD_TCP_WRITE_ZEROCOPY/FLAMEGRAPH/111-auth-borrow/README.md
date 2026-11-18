@@ -291,3 +291,21 @@ Neither is in the borrow.  Rebuilt into `/var/tmp/svcstack-541-kunit`
 `CONFIG_KUNIT` and reached by no WRITE or READ, so it owes no pass.
 Next: `swap-sunrpc.sh` to it, `settled.sh apply`, `kunit-auth.sh
 /var/tmp/svcstack-541-kunit`.
+
+### The auth suite passes (02:20)
+
+`kunit-auth.sh /var/tmp/svcstack-541-kunit` after the swap to it:
+**`svcauth_unix_borrow` 12 of 12, no skip, no `WARNING:`, `BUG:` or
+`Oops` in its run** (logs in `/var/tmp/zc-run-logs/kunit-auth-541/`);
+the stack back at the settled setting, kdump armed.
+
+### The export suite: the plan
+
+`nfsd_export_borrow` is linked into nfsd.  A test nfsd from the same
+stack's sources, `/var/tmp/svcstack-541-kunit/nfsd-ebt/nfsd.ko`, built
+with `CONFIG_NFSD_EXPORT_BORROW_KUNIT_TEST=y` and
+`CONFIG_NFSD_RTC_KUNIT_TEST` off (W=1, no warning; its only suite is
+`nfsd_export_borrow_suite`).  `kunit-export.sh
+/var/tmp/svcstack-541-kunit` loads it with `kunit` at `enable=1
+filter_glob=nfsd_export_borrow`, no service started, then puts the
+stack's own nfsd back as `kunit-auth.sh` does.
