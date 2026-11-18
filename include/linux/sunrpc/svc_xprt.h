@@ -301,6 +301,7 @@ enum {
 	SVC_RTC_RECV,			/* work item owns XPT_BUSY */
 	SVC_RTC_STOPPING,		/* svc_rtc_xprt_stop() ran */
 	SVC_RTC_THREAD_CALLS,		/* its last call peeked was not served */
+	SVC_RTC_SEND_MORE,		/* the reply being sent has more after it */
 };
 
 struct svc_rtc_stats {

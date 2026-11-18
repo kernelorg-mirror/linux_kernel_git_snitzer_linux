@@ -1221,6 +1221,8 @@ static DEFINE_PER_CPU(u64, svc_rtc_undiverted);
 static DEFINE_PER_CPU(u64, svc_rtc_send_full_n);
 /* Enqueues refused write space by the send bound (svc_rtc_has_wspace()). */
 static DEFINE_PER_CPU(u64, svc_rtc_send_nospace_n);
+/* replies the FIFO sent with RQ_SEND_MORE */
+static DEFINE_PER_CPU(u64, svc_rtc_send_more_n);
 /*
  * Connections whose work item is placed on each CPU, over every service:
  * raised and lowered as svc_rtc_set_cpu() moves a connection, lowered
@@ -1312,6 +1314,10 @@ void svc_rtc_stats_show(struct seq_file *m)
 		for_each_possible_cpu(cpu)
 			undiverted += READ_ONCE(per_cpu(svc_rtc_send_nospace_n, cpu));
 		seq_printf(m, "send_nospace %llu\n", undiverted);
+		undiverted = 0;
+		for_each_possible_cpu(cpu)
+			undiverted += READ_ONCE(per_cpu(svc_rtc_send_more_n, cpu));
+		seq_printf(m, "send_more %llu\n", undiverted);
 		seq_puts(m, "placed");
 		for_each_possible_cpu(cpu) {
 			int n = atomic_read(per_cpu_ptr(&svc_rtc_placed, cpu));
@@ -1646,6 +1652,21 @@ static bool svc_rtc_balance __read_mostly;
 module_param(svc_rtc_balance, bool, 0644);
 MODULE_PARM_DESC(svc_rtc_balance,
 		 "Place each run-to-completion work item on the eligible CPU holding the fewest (default: by a hash of the connection)");
+
+/*
+ * svc_rtc_send_more: send a FIFO reply that has another after it with
+ * MSG_MORE, so that small replies share segments and skbs instead of
+ * each going to the device on its own.  Another follows when the FIFO
+ * holds more or the connection has calls parked on async I/O, each of
+ * whose completions runs the work item again; the transport adds
+ * MSG_MORE only while the socket has data in flight, so that the ACK of
+ * it pushes a tail left waiting.  A reply with none after it is sent
+ * without, which pushes the tail.
+ */
+static bool svc_rtc_send_more __read_mostly;
+module_param(svc_rtc_send_more, bool, 0644);
+MODULE_PARM_DESC(svc_rtc_send_more,
+		 "Send run-to-completion replies that have more after them with MSG_MORE (default N)");
 
 /*
  * svc_rtc_send_max: the bytes a connection's TCP send queue (unsent and
@@ -2062,6 +2083,7 @@ VISIBLE_IF_KUNIT unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn,
 						  bool dead)
 {
 	unsigned int budget = dead ? UINT_MAX : SVC_RTC_SEND_BUDGET;
+	bool more = READ_ONCE(svc_rtc_send_more);
 	struct svc_xprt *xprt = conn->xprt;
 	unsigned int n = 0;
 
@@ -2080,9 +2102,17 @@ VISIBLE_IF_KUNIT unsigned int svc_rtc_drain_sends(struct svc_rtc_conn *conn,
 		}
 		conn->pending = node->next;
 		send = llist_entry(node, struct svc_rtc_send, node);
+		/* a pass follows for each of these; see svc_rtc_send_more */
+		if (!dead && more &&
+		    (conn->pending || !llist_empty(&conn->sendq) ||
+		     atomic_read(&conn->parked)))
+			set_bit(SVC_RTC_SEND_MORE, &conn->flags);
+		else
+			clear_bit(SVC_RTC_SEND_MORE, &conn->flags);
 		send->fn(xprt, send, dead);
 		n++;
 	}
+	clear_bit(SVC_RTC_SEND_MORE, &conn->flags);
 	if (!dead)
 		svc_rtc_send_unlock(xprt);
 
@@ -3297,8 +3327,14 @@ static void svc_rtc_send_reply(struct svc_xprt *xprt,
 	struct svc_rqst *rqstp = r->rqstp;
 	int status = -ENOTCONN;
 
-	if (!dead && !WARN_ON_ONCE(!xprt->xpt_ops->xpo_sendto_locked))
+	if (!dead && !WARN_ON_ONCE(!xprt->xpt_ops->xpo_sendto_locked)) {
+		if (test_bit(SVC_RTC_SEND_MORE, &r->conn->flags)) {
+			set_bit(RQ_SEND_MORE, &rqstp->rq_flags);
+			this_cpu_inc(svc_rtc_send_more_n);
+		}
 		status = xprt->xpt_ops->xpo_sendto_locked(rqstp);
+		clear_bit(RQ_SEND_MORE, &rqstp->rq_flags);
+	}
 	trace_svc_send(rqstp, status);
 	if (status >= 0)
 		svc_rtc_stat_inc(fast_completed);

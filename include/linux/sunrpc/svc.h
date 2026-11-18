@@ -503,6 +503,7 @@ enum {
 	RQ_PAYLOAD_SHARED,	/* a later operation still reads the payload */
 	RQ_WAKING,		/* a wake of this idle thread is in flight */
 	RQ_HANDOFF,		/* the wake brings a transport in rq_handoff */
+	RQ_SEND_MORE,		/* the rtc FIFO sends another reply after it */
 };
 
 #define SVC_NET(rqst) (rqst->rq_xprt ? rqst->rq_xprt->xpt_net : rqst->rq_bc_net)
