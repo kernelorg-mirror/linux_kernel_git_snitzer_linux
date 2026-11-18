@@ -816,6 +816,26 @@ static void ebt_other_fsid(struct kunit *test)
 	ebt_hit_once(t);
 }
 
+/* 11b: the entry used last is looked at first; another key is scanned. */
+static void ebt_mru_first(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	u32 fsid2 = EBT_FSID + 1;
+	struct ebt_delta d;
+
+	ebt_install(t);
+	ebt_miss(t);
+	ebt_miss_in(t, 0, FSID_NUM, &fsid2);	/* fsid2 is now the last */
+	ebt_mark(&d);
+	ebt_hit_once(t);			/* EBT_FSID: found by the scan */
+	EBT_EXPECT_DELTA(test, &d, mru, 0);
+	ebt_mark(&d);
+	ebt_hit_once(t);			/* EBT_FSID again: the last */
+	EBT_EXPECT_DELTA(test, &d, mru, 1);
+	EBT_EXPECT_DELTA(test, &d, hit, 1);
+	KUNIT_EXPECT_EQ(test, EBT_ENT(t)->fsid[0], (u32)EBT_FSID);
+}
+
 /* 11a: more keys than entries: the least recently used one is replaced. */
 static void ebt_lru_evict(struct kunit *test)
 {
@@ -1491,6 +1511,7 @@ static struct kunit_case nfsd_export_borrow_cases[] = {
 	KUNIT_CASE(ebt_other_net),
 	KUNIT_CASE(ebt_other_fsid),
 	KUNIT_CASE(ebt_lru_evict),
+	KUNIT_CASE(ebt_mru_first),
 	KUNIT_CASE(ebt_drain_idle),
 	KUNIT_CASE(ebt_drain_borrowed),
 	KUNIT_CASE(ebt_double_return),
