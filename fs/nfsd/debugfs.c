@@ -138,7 +138,8 @@ DEFINE_SHOW_ATTRIBUTE(nfsd_rtc_stats);
  * /sys/kernel/debug/nfsd/export_borrow
  *
  * Per-thread export borrow counters, summed over CPUs: NFSv3 file handles
- * served from one of the thread's cached exports (hit), entries filled on
+ * served from one of the thread's cached exports (hit), lookups whose key
+ * was the entry used last (mru, stale ones included), entries filled on
  * a miss (fill), fills that dropped a live entry to make room (evict),
  * requests that took the plain lookup (skip), slot drains, and returns
  * without a borrow.  Read-only.
@@ -148,8 +149,8 @@ static int nfsd_export_borrow_show(struct seq_file *m, void *v)
 	struct nfsd_exp_borrow_counts c;
 
 	nfsd_exp_borrow_read_counts(&c);
-	seq_printf(m, "hit %lu fill %lu evict %lu skip %lu drain %lu bad_return %lu\n",
-		   c.hit, c.fill, c.evict, c.skip, c.drain, c.bad_return);
+	seq_printf(m, "hit %lu mru %lu fill %lu evict %lu skip %lu drain %lu bad_return %lu\n",
+		   c.hit, c.mru, c.fill, c.evict, c.skip, c.drain, c.bad_return);
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(nfsd_export_borrow);
