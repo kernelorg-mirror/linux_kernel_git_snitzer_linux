@@ -60,3 +60,29 @@ it in an IOPS run is not measured yet (rtc_stats before and after one).
 `/sys/kernel/debug/nfsd/rtc_stats` read before and after one
 `settled-iops.sh` run of nfs4k.sh, t2-r1047; the counts' differences
 against the run's calls offered (`read_offered`) and diversions.
+
+### Result: t2-r1047 (09:48 to 09:52)
+
+2.92 M IOPS (1.49 / 1.43), p99 2.80 / 3.00 ms, no new kernel warning.
+`rtc_stats` over the run (about 25 s of load):
+
+| Count | In the run | Share |
+|---|---|---|
+| `diverted` (the work item classified a call) | 80,218,983 | |
+| `read_offered` (a READ served on the fast path) | 72,485,841 | 90.4% of diverted |
+| `fast_completed` | 72,484,994 | every READ offered |
+| **`fallback_no_peek`** (header not peekable, to a thread) | **7,733,021** | **9.6% of diverted; 10.7 a 100 READs** |
+| `fallback_conn_full`, `not_fast`, `file_miss`, `pool_empty` | 968 | |
+| `undiverted` | 10,476,278 | |
+| `rebalanced` | 27 | |
+
+Every READ was still served on the fast path (`fast_completed` is the
+READs at 2.92 M for about 25 s), so a `no_peek` hand-off serves no
+call: an nfsd thread is woken, finds the record still partial, and the
+connection comes back to its work item when the rest arrives.  About
+310,000 thread wakeups a second for nothing.
+
+What they cost, from t2-r1045's profile: the `nfsd` threads hold 2.33%
+of the server's samples, about **0.5 us a READ** (`finish_task_switch`
+0.48% of it), not counting the waking side or the RFS flow steered to
+the thread's CPU and back.
