@@ -37,3 +37,13 @@ match; any entry still takes any handle, so no conflict misses.  48
 tags are three cache lines.  Built into `/var/tmp/svcstack-541-fhtag`
 (nfsd `6C1DB2E1B6B2CC84026E7B1`), W=1 clean.  The KUnit cases stand as
 they were.  One `prof-srv.sh` run (t2-r1027) against t2-r1024.
+
+## Result of the tag array: t2-r1027 (18 November, 07:51 to 07:54)
+
+2.74 M IOPS (1.45 / 1.30), p99 2.93 / 3.29 ms, server 77% busy, no new
+kernel warning.  fh_hit 72.6 M, fh_miss 109 K, no eviction (99.85%).
+`nfsd_fh_borrow` **0.88%**, against 0.87% with the scan (t2-r1024): no
+saving.  `perf annotate`: the function's samples are on loads every hit
+makes anyway, the matched entry's dentry (about 24%), the MRU entry's
+(10%), the inode's i_nlink for the unlinked check (about 14%); the scan
+was never the cost.  Proposed to Mike: revert it too.
