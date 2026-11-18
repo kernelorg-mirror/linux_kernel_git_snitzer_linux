@@ -267,3 +267,27 @@ borrow suite has run.  On build 541 at the tip's stack
    nfsd loads.  Results from
    `/sys/kernel/debug/kunit/nfsd_export_borrow/results`, then the
    stack's own nfsd swapped back and `settled.sh apply`.
+
+### The auth suite's first run (02:13): 8 of 12, the four failures the suite's own
+
+`kunit-auth.sh /var/tmp/svcstack-541-checked`: host up, the stack back
+at the settled setting after it.  `ok` 1 to 3, 6 to 8, 10, 12; `not
+ok` 4 `sab_half_age`, 5 `sab_half_age_no_listener`, 9 `sab_lru`, 11
+`sab_free`, with three refcount warnings (`refcount_warn_saturate`:
+addition on 0 in `svcauth_unix_kunit_ip_map_set()`, then underflow).
+
+- The warnings, 9 and 11: the suites' ip_map setter put the lookup's
+  reference after `__ip_map_update()` had already handed it to
+  `sunrpc_cache_update()`, freeing an entry still hashed; the counts
+  after it read saturated (0xc0000000).  `9691e5492a90a`.
+- 4 and 5: they aged the entry in the second they filled it, and an
+  entry checked that second is lent (`9fbe6e9f4ef99`, as meant).
+  `91b350c7a3e5f` waits for the next second first.
+
+Neither is in the borrow.  Rebuilt into `/var/tmp/svcstack-541-kunit`
+(sunrpc `85537945BAC1207EDA22E45`, nfsd unchanged
+`DC178C9D921DD1CDFF947D7`); the sunrpc differs from
+`E221A34ED597178925B8BD3` only in that setter, built under
+`CONFIG_KUNIT` and reached by no WRITE or READ, so it owes no pass.
+Next: `swap-sunrpc.sh` to it, `settled.sh apply`, `kunit-auth.sh
+/var/tmp/svcstack-541-kunit`.
