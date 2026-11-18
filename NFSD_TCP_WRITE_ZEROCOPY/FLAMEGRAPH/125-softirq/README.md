@@ -37,3 +37,10 @@ pseudo-NMI can only sample where interrupts come back on: a boot with
 - **The steering (RPS/RFS, 3.1 us of receive on the work CPUs and the
   IPIs):** the receive work is needed wherever it runs; what the
   steering itself costs is in the 1.0 us that only pseudo-NMI places.
+
+## The A/B of tcp_limit_output_bytes (Mike: "run the tcp_limit_output_bytes A/B, quick")
+
+Under `settled-iops.sh`, `EXP_TCP_LOB` 4194304 (4 MiB, the setting off
+tardis2) against the settled 262144, two runs a side in turns (t2-r1030
+to r1033), each followed by a plain `settled.sh apply`; CPU a READ from
+the server's busy.
