@@ -20,3 +20,9 @@ clean.
 
 The quick A/B: `ab-rebal.sh 1034:250 1035:0 1036:250 1037:0` under
 `settled-iops.sh`.
+
+**Restarted on round 125's setting (Mike: "I want 126 to build ontop of
+the 125 I just settled").**  `settled-iops.sh` holds
+`tcp_limit_output_bytes` 4 MiB since `e4fcb2f38764a`; t2-r1034 was
+already running on the old file at 256 KiB and does not count.  The
+A/B runs again as `ab-rebal.sh 1038:250 1039:0 1040:250 1041:0`.
