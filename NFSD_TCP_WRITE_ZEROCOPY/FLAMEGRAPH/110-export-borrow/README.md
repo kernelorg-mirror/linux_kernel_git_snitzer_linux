@@ -146,3 +146,23 @@ Candidates for the next round, none of them started: the auth caches'
 per-call lookup (`svcauth_unix_set_client`) borrowed per thread as the
 export now is; the dentry decode under `nfsd_set_fh_dentry`; the reply
 send's cost per 4 KiB.
+
+## The entry used last first (18 November)
+
+Mike: "do the MRU-first scan".  `f85de7d8a7d1e` "NFSD: Look at the
+export borrowed last first": the slot keeps the index of the entry hit
+or filled last and looks at it before scanning; the match is always
+inline and compares the fsid type and first word before the rest.
+debugfs counts the lookups found there as `mru`.  Its suite case is
+`c3493f011b68e` (`ebt_mru_first`), compiled at W=1, not run.  Built
+into `/var/tmp/svcstack-541-mru/stack` (nfsd `528EBC791C7D3FAEB133919`,
+sunrpc unchanged; `nfsd_exp_ent_match` no longer a symbol).
+
+The borrow fix (`bbcc6e8d1389d`) has had no WRITE or READ pass yet; both
+are run on this build, which carries it.  The plan, in order:
+
+    cd xeu-rig; STACK=/var/tmp/svcstack-541-mru/stack SUNRPC_KO=none \
+        ./step.sh /var/tmp/zc-run-logs/541 swap-mru ./swap-sunrpc.sh
+    ./settled.sh apply
+    ./write-check.sh 931; ./read-check.sh 932
+    ../FLAMEGRAPH/110-export-borrow/prof-borrow.sh 933 16
