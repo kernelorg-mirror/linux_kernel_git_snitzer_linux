@@ -167,3 +167,35 @@ from it with `cbuild132.sh` into `/root/zc-ckern/T` and loaded with
 1082:Y 1083:N 1084:Y:pin0`: each a profiled WRITE pass
 (`prof-write.sh`), the last with fio's writers unpinned (`PIN=0`).
 The client back on build 541's stack after.
+
+### Result (18 November, 19:16 to 19:33): the choice makes the tail, not the rate
+
+Client stack from `a60960b6a6f99` (sunrpc `A2807F183DF8C0F5B900901`),
+the tip's server; each a profiled WRITE pass.
+
+| Run | Choice | WRITE GB/s | p99 a / b (ms) | RPCs waiting to send t6 / t9 / t12 | A transport at t9: min / median / max |
+|---|---|---|---|---|---|
+| t2-r1079 (build 469) | round-robin | 77.70 | 83 / 84 | 2,825 / 2,944 / 2,973 | 85 / ~90 / 102 |
+| t2-r1080 | Y, per-CPU | 74.89 | 152 / 154 | 5,031 / 4,461 / 4,316 | 43 / 133 / 293 |
+| t2-r1081 | N, round-robin | 72.49 (RERUN) | 84 / 89 | 2,152 / 1,924 / 1,817 | 0 / 31 / 218 |
+| t2-r1082 | Y, per-CPU | 74.87 | 154 / 154 | 4,983 / 4,631 / 5,101 | 21 / 137 / 294 |
+| t2-r1083 | N, round-robin | 72.61 (RERUN) | 87 / 84 | 2,008 / 1,899 / 1,418 | 0 / 34 / 187 |
+| t2-r1084 | Y, `PIN=0` | 74.05 (RERUN) | 160 / 156 | 4,412 / 4,315 / 4,209 | 35 / 116 / 318 |
+
+No new kernel warning in any; no drive stepped down.
+
+- **The per-CPU choice makes build 541's tail**: round-robin brings its
+  p99 to build 469's (84 to 89 ms against 152 to 160) and halves what
+  waits to send.
+- **It is not the 3 GB/s**: round-robin on 541 writes 72.55, 2.3 less
+  than the per-CPU choice's 74.88, where 469's round-robin writes 77.7.
+  Fewer WRITEs reach the transports' queues at all, and those queues
+  are still uneven (0 to about 200).  How many WRITEs reach the sockets
+  and where they wait comes from the rest of build 541's path, which
+  build 469 has none of: rpciod per-CPU (`ccaaf769083fe`), the first
+  RPC leg in fio's own context (`50eee8803afc5`), the hand from sending
+  to pending without a requeue (`ba5642ee4cac2`).
+- **Unpinned writers** (`PIN=0`) change nothing (74.05).
+
+The client is back on build 541's stack.  The DROP switch stays on the
+branch while this round goes on; it is rebased out when the round ends.
