@@ -36,3 +36,14 @@ The server runs the tip's own svc stack since 17:24 (round 135, "After").
 
 The client has no NFS mounted and is ready for Mike's reboot into
 build 469.
+
+## The before profile and trace (Mike: "have you collected perf data
+from both the client and server while running the tip on the server?
+as the comprehensive 'before' profile and trace data")
+
+`prof-write.sh 1077`: one WRITE pass with perf on both hosts (499 Hz,
+5 s, data in each host's /dev/shm, `-N`), mpstat on both, the client's
+memory controllers (round 107's shape), `ss -tni` on both hosts' ports
+and the client's per-transport RPC queues three times in the load, and
+nstat deltas on both.  The same script runs on build 469 after the
+reboot.
