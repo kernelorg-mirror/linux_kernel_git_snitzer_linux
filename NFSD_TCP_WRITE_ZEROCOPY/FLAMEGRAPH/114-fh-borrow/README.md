@@ -62,3 +62,8 @@ M), where the export side evicted none.  Mike, 18 November: "after the
 A/B, run fh_borrow_slots 64 against 16":
 
     ../FLAMEGRAPH/114-fh-borrow/ab-fh.sh 981:64 982:16 983:64 984:16 985:64 986:16
+
+The 16-against-0 A/B was cut after t2-r976 (Mike: "stop after r976 and
+go straight to the 64 against 16 runs"), the off side's baseline being
+rounds 112 and 113's runs of the same shape on the stack before the
+change (t2-r966, r968, r970, r972: 2.54 to 2.55 M).
