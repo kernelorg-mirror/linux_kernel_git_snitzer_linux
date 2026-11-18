@@ -238,3 +238,23 @@ Next, not started: the workqueue lock the client queues under at
 2.5 M; the wire's groups allocated on every call
 (`svcauth_unix_accept`); the borrow suites' KUnit runs (Mike, 18
 November: "we do also need to actually test the Kunit tests").
+
+## The borrow suites run (18 November, plan)
+
+Mike: "we do also need to actually test the Kunit tests".  Neither
+borrow suite has run.  On build 541 at the tip's stack
+(`/var/tmp/svcstack-541-checked`), no client connected, kdump armed:
+
+1. `svcauth_unix_borrow` (`2c014fffa6c3f`, `4cd2db18dfc8a`), twelve
+   cases: built as `svcauth_unix_kunit.ko` against the running sunrpc
+   (`E221A34ED597178925B8BD3`, which exports the interface of
+   `01ad6b07da122`), loaded with insmod through `step.sh`; it runs on
+   its own test net and caches.  Results from
+   `/sys/kernel/debug/kunit/svcauth_unix_borrow/results`, then rmmod.
+2. `nfsd_export_borrow` (the cases of `5420d7f0a7dc7` and
+   `c3493f011b68e`): nfsd built from the same tree with
+   `CONFIG_NFSD_EXPORT_BORROW_KUNIT_TEST=y`, swapped in with
+   `swap-sunrpc.sh` (`NFSD_KO=`, `SUNRPC_KO=none`); the suite runs as
+   nfsd loads.  Results from
+   `/sys/kernel/debug/kunit/nfsd_export_borrow/results`, then the
+   stack's own nfsd swapped back and `settled.sh apply`.

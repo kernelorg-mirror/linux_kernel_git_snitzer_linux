@@ -524,6 +524,16 @@ settled setting above; the
 `svc_rtc_kunit` suite took the host down on 17 November and is not
 to be run again until its crash is understood.**
 
+**KUnit on tardis2, 18 November (Mike: "we do also need to actually
+test the Kunit tests.. you wrote some recently for the export borrow
+that were never tested", then "yes, and write a KUnit suite for the
+auth borrow too"): the two borrow suites, `nfsd_export_borrow` (linked
+into nfsd, run by swapping in a test nfsd) and `svcauth_unix_borrow`
+(its own module), are run on the host with no client connected, each
+step through `xeu-rig/step.sh` and committed before it runs.  Every
+other suite stays off tardis2 as above; `svc_rtc_kunit` above all.
+The account is round 111's README, "The borrow suites run".**
+
 **Withdrawn (Mike, 17 November: "I'm not pursuing that gitlab build
 given its unlikely to help"): the boot below.  tardis2 stays on build
 534 with `sunrpc-nosplit-534`.**  ~~tardis2's next boot (Mike, 16
