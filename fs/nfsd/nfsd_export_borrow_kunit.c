@@ -96,6 +96,9 @@ struct ebt {
 	struct cache_deferred_req dreq;
 	unsigned int		decodes;
 	bool			decode_drain;
+	/* set: fh_to_dentry() resolves every handle to it, as XFS would */
+	struct inode		*inode;
+	unsigned int		old_ttl;
 };
 
 static struct ebt *ebt_cur;
@@ -213,6 +216,13 @@ static struct dentry *ebt_fh_to_dentry(struct super_block *sb,
 	t->decodes++;
 	if (t->decode_drain)
 		nfsd_exp_slots_drain();
+	if (t->inode) {
+		/* an unlinked file's handle is stale, as xfs_nfs_get_inode() */
+		if (!t->inode->i_nlink)
+			return ERR_PTR(-ESTALE);
+		ihold(t->inode);
+		return d_obtain_alias(t->inode);
+	}
 	return ERR_PTR(-ESTALE);
 }
 
@@ -319,6 +329,8 @@ static int ebt_init(struct kunit *test)
 	ebt_cur = t;
 	t->fsid = EBT_FSID;
 	t->answer_path = &t->path[0];
+	/* the background sweep stays out of the cases; they run it */
+	t->old_ttl = nfsd_fh_borrow_kunit_ttl(3600);
 
 	for (i = 0; i < 2; i++) {
 		ebt_net_init(test, &t->n[i]);
@@ -376,6 +388,9 @@ static void ebt_exit(struct kunit *test)
 	for (i = 0; i < 2; i++)
 		ebt_net_exit(&t->n[i]);
 	rcu_barrier();
+	if (t->inode)
+		iput(t->inode);
+	nfsd_fh_borrow_kunit_ttl(t->old_ttl);
 	for (i = 0; i < 2; i++) {
 		if (t->dom[i])
 			auth_domain_put(t->dom[i]);
@@ -1498,6 +1513,268 @@ static void ebt_rtc_registered_eagerly(struct kunit *test)
 	EBT_EXPECT_DELTA(test, &d, skip, 0);
 }
 
+
+/* The file handle borrow: a test inode that fh_to_dentry() resolves to. */
+static void ebt_fh_inode(struct ebt *t, umode_t mode)
+{
+	struct inode *inode = new_inode(t->mnt[0]->mnt_sb);
+
+	KUNIT_ASSERT_NOT_NULL(t->test, inode);
+	inode->i_ino = get_next_ino();
+	inode->i_mode = mode;
+	t->inode = inode;
+}
+
+/* The kept file handles that hold a dentry. */
+static unsigned int ebt_fh_kept(struct ebt *t)
+{
+	struct nfsd_exp_slot *s = EBT_SLOT(t);
+	unsigned int i, n = 0;
+
+	for (i = 0; i < s->nfh; i++)
+		n += !!s->fh[i].dentry;
+	return n;
+}
+
+/* fh_verify() a regular file's handle; returns its dentry, fh put. */
+static struct dentry *ebt_fh_verify(struct ebt *t, u8 last, __be32 want)
+{
+	struct svc_fh fh;
+	struct dentry *dentry;
+
+	ebt_fh(t, &fh, FILEID_INO32_GEN);
+	fh.fh_handle.fh_raw[fh.fh_handle.fh_size - 1] = last;
+	KUNIT_EXPECT_EQ(t->test, fh_verify(t->rqstp, &fh, 0, NFSD_MAY_NOP),
+			want);
+	dentry = fh.fh_dentry;
+	fh_put(&fh);
+	return dentry;
+}
+
+/*
+ * 33: a regular file's decoded handle is kept, and the next call with
+ * it is lent the dentry without a decode; the slot holds one reference
+ * and the svc_fh its own.
+ */
+static void ebt_fh_lent(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct dentry *dentry;
+	struct ebt_delta d;
+	struct svc_fh fh;
+
+	ebt_fh_inode(t, S_IFREG | 0644);
+	ebt_install(t);
+	ebt_mark(&d);
+	dentry = ebt_fh_verify(t, 0x5a, nfs_ok);
+	KUNIT_ASSERT_NOT_NULL(test, dentry);
+	KUNIT_EXPECT_EQ(test, t->decodes, 1);
+	EBT_EXPECT_DELTA(test, &d, fh_miss, 1);
+	EBT_EXPECT_DELTA(test, &d, fh_fill, 1);
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 1);
+	KUNIT_EXPECT_EQ(test, d_count(dentry), 1);
+
+	ebt_fh(t, &fh, FILEID_INO32_GEN);
+	KUNIT_ASSERT_EQ(test, fh_verify(t->rqstp, &fh, 0, NFSD_MAY_NOP),
+			nfs_ok);
+	KUNIT_EXPECT_PTR_EQ(test, fh.fh_dentry, dentry);
+	KUNIT_EXPECT_EQ(test, d_count(dentry), 2);
+	KUNIT_EXPECT_EQ(test, t->decodes, 1);
+	EBT_EXPECT_DELTA(test, &d, fh_hit, 1);
+	fh_put(&fh);
+	KUNIT_EXPECT_EQ(test, d_count(dentry), 1);
+	EBT_EXPECT_DELTA(test, &d, bad_return, 0);
+}
+
+/* 34: once the file is unlinked a hit misses, drops it and decodes: stale. */
+static void ebt_fh_unlinked(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct ebt_delta d;
+
+	ebt_fh_inode(t, S_IFREG | 0644);
+	ebt_install(t);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	clear_nlink(t->inode);
+	ebt_mark(&d);
+	ebt_fh_verify(t, 0x5a, nfserr_stale);
+	EBT_EXPECT_DELTA(test, &d, fh_stale, 1);
+	EBT_EXPECT_DELTA(test, &d, fh_hit, 0);
+	KUNIT_EXPECT_EQ(test, t->decodes, 2);
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 0);
+	set_nlink(t->inode, 1);
+}
+
+/* 35: another file id is another entry; both are kept and both hit. */
+static void ebt_fh_other_fid(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct ebt_delta d;
+
+	ebt_fh_inode(t, S_IFREG | 0644);
+	ebt_install(t);
+	ebt_mark(&d);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	ebt_fh_verify(t, 0x5b, nfs_ok);
+	KUNIT_EXPECT_EQ(test, t->decodes, 2);
+	EBT_EXPECT_DELTA(test, &d, fh_fill, 2);
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 2);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	ebt_fh_verify(t, 0x5b, nfs_ok);
+	KUNIT_EXPECT_EQ(test, t->decodes, 2);
+	EBT_EXPECT_DELTA(test, &d, fh_hit, 2);
+}
+
+/* 36: a handle that is not a regular file's is decoded every time. */
+static void ebt_fh_not_regular(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct ebt_delta d;
+
+	ebt_fh_inode(t, S_IFLNK | 0777);
+	ebt_install(t);
+	ebt_mark(&d);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	KUNIT_EXPECT_EQ(test, t->decodes, 2);
+	EBT_EXPECT_DELTA(test, &d, fh_miss, 2);
+	EBT_EXPECT_DELTA(test, &d, fh_fill, 0);
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 0);
+}
+
+/* 37: an export with subtree checking never lends or keeps a handle. */
+static void ebt_fh_subtree_check(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct ebt_delta d;
+	struct svc_fh fh;
+
+	ebt_fh_inode(t, S_IFREG | 0644);
+	ebt_install(t);
+	t->exp->ex_flags &= ~NFSEXP_NOSUBTREECHECK;
+	ebt_mark(&d);
+	ebt_fh(t, &fh, FILEID_INO32_GEN);
+	fh_verify(t->rqstp, &fh, 0, NFSD_MAY_NOP);
+	fh_put(&fh);
+	ebt_fh(t, &fh, FILEID_INO32_GEN);
+	fh_verify(t->rqstp, &fh, 0, NFSD_MAY_NOP);
+	fh_put(&fh);
+	KUNIT_EXPECT_EQ(test, t->decodes, 2);
+	EBT_EXPECT_DELTA(test, &d, fh_miss, 0);
+	EBT_EXPECT_DELTA(test, &d, fh_fill, 0);
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 0);
+	t->exp->ex_flags |= NFSEXP_NOSUBTREECHECK;
+}
+
+/* 38: a drain drops the kept handles with the slot's exports. */
+static void ebt_fh_drain(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct dentry *dentry;
+
+	ebt_fh_inode(t, S_IFREG | 0644);
+	ebt_install(t);
+	dentry = ebt_fh_verify(t, 0x5a, nfs_ok);
+	KUNIT_EXPECT_EQ(test, d_count(dentry), 1);
+	/* the case's own reference, so the dentry can be read after */
+	dget(dentry);
+	nfsd_exp_slots_drain();
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 0);
+	KUNIT_EXPECT_EQ(test, d_count(dentry), 1);
+	dput(dentry);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	KUNIT_EXPECT_EQ(test, t->decodes, 2);
+}
+
+/* 39: a replaced export's refill drops the handles kept under the old one. */
+static void ebt_fh_export_replaced(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct nfsd_exp_slot *s = EBT_SLOT(t);
+	struct svc_export *old;
+	struct ebt_delta d;
+	unsigned int i;
+
+	ebt_fh_inode(t, S_IFREG | 0644);
+	ebt_install(t);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	old = t->exp;
+	t->exp = ebt_set_exp(t, 0, t->dom[0], &t->path[0]);
+	KUNIT_ASSERT_PTR_NE(test, t->exp, old);
+	ebt_mark(&d);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	EBT_EXPECT_DELTA(test, &d, fill, 1);
+	EBT_EXPECT_DELTA(test, &d, fh_hit, 0);
+	KUNIT_EXPECT_EQ(test, t->decodes, 2);
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 1);
+	for (i = 0; i < s->nfh; i++)
+		if (s->fh[i].dentry)
+			KUNIT_EXPECT_PTR_EQ(test, s->fh[i].exp, t->exp);
+}
+
+/* 40: the sweep keeps a handle used within the ttl and drops an idle one. */
+static void ebt_fh_sweep(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	time64_t now = seconds_since_boot();
+	struct ebt_delta d;
+
+	ebt_fh_inode(t, S_IFREG | 0644);
+	ebt_install(t);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	ebt_mark(&d);
+	KUNIT_EXPECT_TRUE(test, nfsd_fh_slots_sweep(now, 3600));
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 1);
+	KUNIT_EXPECT_TRUE(test, nfsd_fh_slots_sweep(now + 3600, 3600));
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 0);
+	EBT_EXPECT_DELTA(test, &d, fh_aged, 1);
+	KUNIT_EXPECT_FALSE(test, EBT_SLOT(t)->borrowed);
+	/* the exports stay: only the handles are swept */
+	KUNIT_EXPECT_NOT_NULL(test, EBT_ENT(t)->exp);
+}
+
+/* 41: the sweep drops an unlinked file's handle however recent. */
+static void ebt_fh_sweep_unlinked(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct ebt_delta d;
+
+	ebt_fh_inode(t, S_IFREG | 0644);
+	ebt_install(t);
+	ebt_fh_verify(t, 0x5a, nfs_ok);
+	clear_nlink(t->inode);
+	ebt_mark(&d);
+	nfsd_fh_slots_sweep(seconds_since_boot(), 3600);
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), 0);
+	EBT_EXPECT_DELTA(test, &d, fh_aged, 1);
+	set_nlink(t->inode, 1);
+}
+
+/* 42: with every entry kept, a new handle replaces the least recently used. */
+static void ebt_fh_evict(struct kunit *test)
+{
+	struct ebt *t = test->priv;
+	struct nfsd_exp_slot *s = EBT_SLOT(t);
+	struct ebt_delta d;
+	unsigned int i;
+
+	ebt_fh_inode(t, S_IFREG | 0644);
+	ebt_install(t);
+	KUNIT_ASSERT_GT(test, s->nfh, 1U);
+	for (i = 0; i < s->nfh; i++)
+		ebt_fh_verify(t, i, nfs_ok);
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), s->nfh);
+	ebt_fh_verify(t, 1, nfs_ok);		/* 0 is now the oldest */
+	ebt_mark(&d);
+	ebt_fh_verify(t, s->nfh, nfs_ok);
+	EBT_EXPECT_DELTA(test, &d, fh_evict, 1);
+	KUNIT_EXPECT_EQ(test, ebt_fh_kept(t), s->nfh);
+	ebt_fh_verify(t, 1, nfs_ok);
+	EBT_EXPECT_DELTA(test, &d, fh_hit, 1);
+	ebt_fh_verify(t, 0, nfs_ok);
+	EBT_EXPECT_DELTA(test, &d, fh_miss, 2);
+}
+
 static struct kunit_case nfsd_export_borrow_cases[] = {
 	KUNIT_CASE(ebt_hit_no_refcount),
 	KUNIT_CASE(ebt_export_replaced),
@@ -1531,6 +1808,16 @@ static struct kunit_case nfsd_export_borrow_cases[] = {
 	KUNIT_CASE(ebt_rtc_free_idle),
 	KUNIT_CASE(ebt_rtc_drain_borrowed),
 	KUNIT_CASE(ebt_rtc_registered_eagerly),
+	KUNIT_CASE(ebt_fh_lent),
+	KUNIT_CASE(ebt_fh_unlinked),
+	KUNIT_CASE(ebt_fh_other_fid),
+	KUNIT_CASE(ebt_fh_not_regular),
+	KUNIT_CASE(ebt_fh_subtree_check),
+	KUNIT_CASE(ebt_fh_drain),
+	KUNIT_CASE(ebt_fh_export_replaced),
+	KUNIT_CASE(ebt_fh_sweep),
+	KUNIT_CASE(ebt_fh_sweep_unlinked),
+	KUNIT_CASE(ebt_fh_evict),
 	{}
 };
 
