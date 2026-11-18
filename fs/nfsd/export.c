@@ -2296,6 +2296,7 @@ void nfsd_exp_borrow_read_counts(struct nfsd_exp_borrow_counts *c)
 			per_cpu_ptr(&nfsd_exp_borrow_pcpu, cpu);
 
 		c->hit += READ_ONCE(p->hit);
+		c->mru += READ_ONCE(p->mru);
 		c->fill += READ_ONCE(p->fill);
 		c->evict += READ_ONCE(p->evict);
 		c->skip += READ_ONCE(p->skip);
@@ -2392,12 +2393,18 @@ void nfsd_exp_slot_register(struct nfsd_exp_slot *s)
 	s->registered = true;
 }
 
-static bool nfsd_exp_ent_match(const struct nfsd_exp_slot_ent *e,
-			       struct net *net, struct auth_domain *client,
-			       int fsid_type, const u32 *fsidv, int klen)
+/*
+ * The fsid type and its first word tell most entries apart, so they are
+ * compared first; the memcmp() of the rest runs only on a likely match.
+ */
+static __always_inline bool
+nfsd_exp_ent_match(const struct nfsd_exp_slot_ent *e, struct net *net,
+		   struct auth_domain *client, int fsid_type,
+		   const u32 *fsidv, int klen)
 {
-	return e->exp && e->net == net && e->client == client &&
-	       e->fsid_type == fsid_type && !memcmp(e->fsid, fsidv, klen);
+	return e->fsid_type == fsid_type && e->fsid[0] == fsidv[0] &&
+	       e->exp && e->client == client && e->net == net &&
+	       !memcmp(e->fsid, fsidv, klen);
 }
 
 /**
@@ -2437,7 +2444,7 @@ struct svc_export *nfsd_exp_borrow(struct svc_rqst *rqstp, struct net *net,
 	struct svc_export *exp;
 	struct nfsd_net *nn;
 	int klen = key_len(fsid_type);
-	unsigned int i;
+	unsigned int i, idx;
 	time64_t now;
 
 	*slotp = NULL;
@@ -2464,22 +2471,24 @@ struct svc_export *nfsd_exp_borrow(struct svc_rqst *rqstp, struct net *net,
 	s->borrowed = true;
 	spin_unlock(&s->lock);
 
-	now = seconds_since_boot();
+	/*
+	 * The entry used last first: a thread's calls often come from one
+	 * connection, so one mount and one export, in a row.  Then the
+	 * rest, choosing the victim for a miss on the way.
+	 */
 	victim = NULL;
+	idx = s->mru;
+	e = &s->ent[idx];
+	if (nfsd_exp_ent_match(e, net, client, fsid_type, fsidv, klen)) {
+		this_cpu_inc(nfsd_exp_borrow_pcpu.mru);
+		goto found;
+	}
 	for (i = 0; i < s->nr; i++) {
 		e = &s->ent[i];
-		if (nfsd_exp_ent_match(e, net, client, fsid_type, fsidv,
-				       klen)) {
-			if (nfsd_exp_entry_fresh(e->ekcd, &e->ek->h, now) &&
-			    nfsd_exp_entry_fresh(e->exp->cd, &e->exp->h, now)) {
-				e->used = ++s->clock;
-				this_cpu_inc(nfsd_exp_borrow_pcpu.hit);
-				*slotp = s;
-				return e->exp;
-			}
-			/* stale: refill this one, the key is unique */
-			victim = e;
-			break;
+		if (i != s->mru &&
+		    nfsd_exp_ent_match(e, net, client, fsid_type, fsidv, klen)) {
+			idx = i;
+			goto found;
 		}
 		if (!e->exp) {
 			if (!victim || victim->exp)
@@ -2488,6 +2497,22 @@ struct svc_export *nfsd_exp_borrow(struct svc_rqst *rqstp, struct net *net,
 			victim = e;
 		}
 	}
+	goto miss;
+
+found:
+	now = seconds_since_boot();
+	if (nfsd_exp_entry_fresh(e->ekcd, &e->ek->h, now) &&
+	    nfsd_exp_entry_fresh(e->exp->cd, &e->exp->h, now)) {
+		e->used = ++s->clock;
+		s->mru = idx;
+		this_cpu_inc(nfsd_exp_borrow_pcpu.hit);
+		*slotp = s;
+		return e->exp;
+	}
+	/* stale: refill this one, the key is unique */
+	victim = e;
+
+miss:
 
 	/*
 	 * Miss: drop the victim's pair first, so a key change or a fill
@@ -2521,6 +2546,7 @@ struct svc_export *nfsd_exp_borrow(struct svc_rqst *rqstp, struct net *net,
 	victim->net = net;
 	victim->client = client;
 	victim->used = ++s->clock;
+	s->mru = victim - s->ent;
 	this_cpu_inc(nfsd_exp_borrow_pcpu.fill);
 	*slotp = s;
 	return exp;

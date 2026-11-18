@@ -91,6 +91,7 @@ struct nfsd_exp_slot {
 	bool			enabled;	/* a thread's or rtc rqst's slot */
 	bool			registered;	/* on the drain list (owner) */
 	unsigned int		nr;		/* entries in @ent */
+	unsigned int		mru;		/* the entry hit or filled last */
 	u64			clock;		/* bumped on every hit and fill */
 	struct nfsd_exp_slot_ent *ent;
 	struct list_head	link;
