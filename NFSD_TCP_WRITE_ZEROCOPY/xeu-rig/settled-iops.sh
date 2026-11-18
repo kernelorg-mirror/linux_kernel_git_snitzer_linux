@@ -35,11 +35,14 @@
 #                             0.3 ms lower (round 120, t2-r1009 to r1014;
 #                             Mike, 18 November: "worth adding to
 #                             settled-iops.sh")          EXP_RTC_SEND_MORE
-#   net.ipv4.tcp_limit_output_bytes 4 MiB  (settled on tardis2: 256 KiB)
-#                             0.2 us less server CPU a READ, 2.90 M IOPS
-#                             against 2.865 (round 125, t2-r1030 to r1033;
-#                             Mike, 18 November: "use tcp_limit_output_bytes
-#                             of 4 MiB in settled-iops.sh")     EXP_TCP_LOB
+#   net.ipv4.tcp_limit_output_bytes 1 MiB  (settled on tardis2: 256 KiB)
+#                             4 MiB took 0.2 us less server CPU a READ
+#                             (round 125, t2-r1030 to r1033); under the
+#                             rebalancer every size from 256 KiB to 4 MiB
+#                             read 2.91 to 2.95 M, and 1 MiB tied the most
+#                             at the lowest p99 (round 126, t2-r1042 to
+#                             r1044; Mike, 18 November: "use 1 MiB in
+#                             settled-iops.sh")                 EXP_TCP_LOB
 #   sunrpc.svc_rtc_rebalance_ms 250  connections moved off the busiest
 #                             CPU: 2.91 M IOPS against 2.87, the least busy
 #                             CPUs 58% and more against 46 (round 126,
@@ -122,7 +125,7 @@ export EXP_FH_BORROW_SLOTS=${EXP_FH_BORROW_SLOTS:-48}
 export EXP_RTC_SPILL_CPUS=${EXP_RTC_SPILL_CPUS:-0-7,56-63}
 export EXP_RTC_SPILL_WEIGHT=${EXP_RTC_SPILL_WEIGHT:-1}
 export EXP_RTC_SEND_MORE=${EXP_RTC_SEND_MORE:-Y}
-export EXP_TCP_LOB=${EXP_TCP_LOB:-4194304}
+export EXP_TCP_LOB=${EXP_TCP_LOB:-1048576}
 export EXP_RTC_REBALANCE_MS=${EXP_RTC_REBALANCE_MS:-250}
 export EXP_SYSCTL=${EXP_SYSCTL:-"net.core.rmem_max=268435456;net.core.wmem_max=268435456;net.ipv4.tcp_rmem=4096 1048576 268435456;net.ipv4.tcp_wmem=4096 1048576 268435456"}
 case "${1:-}" in
