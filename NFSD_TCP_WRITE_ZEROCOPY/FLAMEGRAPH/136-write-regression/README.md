@@ -613,3 +613,10 @@ a WRITE and READ pass with the client on updates/"):
 | t2-r1123 | READ | **82.38 GB/s PASS** (41.31 / 41.06 a port, every drive 10.2 to 10.4 GB/s), no new kernel warning |
 
 The settled setting after.
+
+4 KiB random READs at iodepth 96 with the client on `updates/` (Mike:
+"run the 4K IOPS test with the client on updates/"): t2-r1124 **3.54 M
+IOPS** (1.75 / 1.79 M a port), p99 4.01 / 3.49 ms, 15.37 us of the
+server's CPU and 11.80 us of the client's a READ, no new kernel
+warning; t2-r1120 on the same stack read 3.63 M, the tip's per-CPU
+stack 3.48 to 3.57 M.
