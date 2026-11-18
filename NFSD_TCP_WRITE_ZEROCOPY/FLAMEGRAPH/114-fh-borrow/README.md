@@ -30,8 +30,8 @@ ttl for the suites), `b6b2f9e6a6147` (ten cases in
 `sunrpc-nfsd-export-borrow`, 42 in all).
 
 Built into `/var/tmp/svcstack-541-fhb` (sunrpc `85537945BAC1207EDA22E45`,
-unchanged; nfsd `EA90A54F716F92B04DE45E6` before the sweep was factored,
-rebuilt below), W=1, no warning; the test nfsd with the suite in
+unchanged; nfsd `DFC417DB5E771ABF21E2D4D`, the tip with the sweep factored),
+W=1, no warning; the test nfsd with the suite in
 `nfsd-ebt/`.
 
 ## The plan
