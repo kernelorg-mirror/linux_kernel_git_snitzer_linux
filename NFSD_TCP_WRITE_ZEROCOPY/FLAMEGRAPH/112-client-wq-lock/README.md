@@ -95,3 +95,30 @@ run's geometry line), at the IOPS setting, both borrows held:
 
     cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r112 scope ./settled-iops.sh run \
         ../FLAMEGRAPH/109-iops/ab-scope.sh 966:cpu 967:cache_shard 968:cpu 969:cache_shard 970:cpu 971:cache_shard
+
+## The A/B's results (18 November, 03:16 to 03:35)
+
+Every run's geometry line confirms its scope; no new kernel warning;
+the host back at the settled setting after.
+
+| Run | Scope | M IOPS (ports) | ms mean / p99 a; b | Client busy (busiest) | Server busy (busiest) |
+|---|---|---|---|---|---|
+| t2-r966 | cpu | 2.54 (1.25 / 1.29) | 1.23 / 4.69; 1.18 / 4.36 | 67% (78%) | 72% (96%) |
+| t2-r967 | cache_shard | 2.52 (1.24 / 1.28) | 1.24 / 4.62; 1.20 / 4.55 | 70% (80%) | 71% (93%) |
+| t2-r968 | cpu | 2.54 (1.27 / 1.27) | 1.21 / 4.88; 1.20 / 4.95 | 68% (76%) | 72% (98%) |
+| t2-r969 | cache_shard | 2.54 (1.26 / 1.28) | 1.22 / 4.69; 1.20 / 4.55 | 71% (82%) | 72% (95%) |
+| t2-r970 | cpu | 2.55 (1.27 / 1.28) | 1.20 / 4.82; 1.20 / 4.75 | 68% (77%) | 72% (96%) |
+| t2-r971 | cache_shard | 2.53 (1.27 / 1.26) | 1.21 / 4.55; 1.21 / 4.55 | 71% (77%) | 71% (95%) |
+
+- **Rate: cpu 2.543 M, cache_shard 2.530 M on the mean, 0.5%**: within
+  the spread (cache_shard's own runs span 2.52 to 2.54).  No gain in rate.
+- **Client CPU: 67 to 68% at cpu against 70 to 71%, 3 points less in
+  every pair**, the busiest CPU 76 to 78% against 77 to 82%.  The pool
+  lock's waiting goes, as round 112's profile measured it (about 2%).
+- **p99 0.1 to 0.3 ms longer at cpu** (4.69 to 4.95 against 4.55 to
+  4.69): a release or receive item waits for its own CPU's worker, with
+  no other CPU of the shard to take it.
+- **The server's busiest work CPU reads 95 to 98% in every run**: the
+  client's lock no longer sets the rate; the server does.  A client
+  change that only frees client CPU (option 2, nfsiod per-CPU) would
+  likely show the same: less client CPU, the same rate.
