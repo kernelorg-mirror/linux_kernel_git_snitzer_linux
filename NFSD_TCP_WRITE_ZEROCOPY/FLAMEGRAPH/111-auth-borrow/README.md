@@ -157,3 +157,84 @@ nfsd `DC178C9D921DD1CDFF947D7`), no warning at W=1.  The plan:
     ../FLAMEGRAPH/111-auth-borrow/ab-auth.sh 957:Y 958:N 959:Y 960:N 961:Y 962:N
     ../FLAMEGRAPH/111-auth-borrow/prof-both.sh 963 Y
     ../FLAMEGRAPH/111-auth-borrow/prof-both.sh 964 N
+
+## Results on the fixed stack (18 November, 01:22 to 02:00)
+
+`/var/tmp/svcstack-541-checked/stack` (sunrpc `E221A34ED597178925B8BD3`,
+nfsd `DC178C9D921DD1CDFF947D7`), client build 541.  No new kernel
+warning in any run (the wider filter of `c30fb8f5fdaab`).
+
+### Passes
+
+| Run | | Result | ip_map hits / fills | gid hits / fills |
+|---|---|---|---|---|
+| t2-r955 | WRITE pass | **74.90 GB/s, PASS** (mark 74.6) | 5.10 M / 178 | 5.10 M / 97 |
+| t2-r956 | READ pass | **78.91 GB/s, PASS** (mark 71.5) | 18.32 M / 552 | **18.32 M / 7,403** |
+
+The READ pass's gid fills are 7,403 where the stack before had 9.98 M:
+the gap is closed.  Against the frame: 75% of what the drives read with
+local fio (104.58 GB/s), 80% of what the ports send with iperf3 `-Z`
+(98.31); the pass measures no memory or Send-Q.  (79.83 to 79.89 on the
+two stacks before it, within the night's spread.)
+
+### The A/B: the borrow is worth 2.4%
+
+| Run | svcauth_borrow | M IOPS (ports) | ms mean / p99 | Server busy (busiest) | Client busy (busiest) | gid hits / fills |
+|---|---|---|---|---|---|---|
+| t2-r957 | Y | 2.55 (1.27 / 1.28) | 1.21 / 4.42 | 71% (92%) | 71% (78%) | 67.80 M / 10,665 |
+| t2-r958 | N | 2.47 (1.26 / 1.21) | 1.21 / 4.42 | 71% (93%) | 69% (74%) | |
+| t2-r959 | Y | 2.54 (1.26 / 1.28) | 1.21 / 4.55 | 71% (92%) | 70% (78%) | 67.71 M / 1,339 |
+| t2-r960 | N | 2.49 (1.24 / 1.25) | 1.23 / 4.69 | 73% (95%) | 70% (77%) | |
+| t2-r961 | Y | 2.54 (1.26 / 1.28) | 1.21 / 4.62 | 72% (94%) | 71% (76%) | 67.46 M / 17,335 |
+| t2-r962 | N | 2.49 (1.27 / 1.22) | 1.21 / 4.49 | 72% (95%) | 70% (78%) | |
+
+ms mean / p99 is port a's.  ip_maps hit 99.996% in every Y run, the
+export borrow 99.98% on both sides.
+
+- **Y 2.54 to 2.55 M, N 2.47 to 2.49 M: every Y run above every N run,
+  2.4% on the mean** (2.543 against 2.483).  The first change of rounds
+  110 and 111 that moves IOPS and not only CPU.
+- Port b carries it: 1.28 M in all three Y runs, 1.21 to 1.25 off.
+
+### Both ends profiled (t2-r963 Y, t2-r964 N)
+
+`prof-both.sh`; reports in `/var/tmp/zc-run-logs/t2-r963/` and
+`t2-r964/` (`prof-srv-*`, `prof-cli-*`), the server's data in
+`/dev/shm/zc-p111-963.data` and `-964.data`.
+
+| Server, share of samples | t2-r963 (Y, 2.53 M) | t2-r964 (N, 2.48 M) |
+|---|---|---|
+| `svc_set_client`, with children | **1.26%** | 4.36% |
+| `svcauth_unix_set_client`, self | 0.38% | 1.98% |
+| `auth_domain_put` (`refcount_dec_not_one`) | **0.08%** | 1.10% |
+| `svcauth_unix_release`, with children | 0.76% | 1.53% |
+| the borrow's lookups (`svcauth_borrow_ipm_find`, `svcauth_borrow_gid`) | 0.59% | |
+| `svcauth_unix_accept` (`groups_alloc` in it) | 1.59% (0.58%) | 1.55% (0.57%) |
+| swapper (idle) | 18.67% | 18.19% |
+| busiest CPU (mpstat) | **92%** | 100% |
+
+The borrow takes about 3.9 points of the server's samples off the auth
+path, most of them the shared refcounts' writes, and the busiest work
+CPU drops from 100% to 92%: that CPU sets the pace, so IOPS rise.
+What is left of the auth path is mostly `svcauth_unix_accept`'s
+`groups_alloc()` of the wire's groups on every call, thrown away once
+the cached groups replace them (0.58%).
+
+| Client, share of samples | t2-r963 (Y) | t2-r964 (N) |
+|---|---|---|
+| `_raw_spin_lock` + `native_queued_spin_lock_slowpath`, self | 5.75 + 3.89% | 5.69 + 3.94% |
+| `queue_work_on`, with children | 6.16% | 6.17% |
+| `rpc_async_schedule` (rpciod's work), with children | 29.04% | 28.38% |
+| `cpu_idle_poll` | 24.88% | 25.45% |
+
+The client is the same on both sides: about 10% of its samples in spin
+locks, most of them under `queue_work_on`, a workqueue pool's lock as it
+queues work for rpciod and xprtiod (round 108's limit on build 469 at
+63.5%, cut by build 541's commits, back at 2.5 M), and a quarter of its
+time idle-polling.  `xs_tcp_force_close` at 23% under rpciod is on
+inlined frames, likely a symbol misattributed, not connections closed.
+
+Next, not started: the workqueue lock the client queues under at
+2.5 M; the wire's groups allocated on every call
+(`svcauth_unix_accept`); the borrow suites' KUnit runs (Mike, 18
+November: "we do also need to actually test the Kunit tests").
