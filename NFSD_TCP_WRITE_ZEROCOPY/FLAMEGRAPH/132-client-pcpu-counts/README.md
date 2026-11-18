@@ -70,3 +70,40 @@ Then (Mike: "please just do a single 1062:P, I need us to move onto the
 next ... have 1063 be a quick run P and iodepth of 96"): P rebuilt on
 the client from the tip, `ab-pcpu.sh 1062:P 1063:P:96`, set beside
 B's two runs above and round 130's iodepth 96 run (t2-r1053, 3.36 M).
+
+## Result with rpcauthrefresh per CPU (18 November, 16:10 to 16:23)
+
+P rebuilt on the client from `e476bfc6bb64e` (sunrpc
+`C4A23C35035DD3A1E1C967B`).  t2-r1062 measured nothing: it started while
+a git worktree, added on tardis2 to reword the SUNRPC commit, filled the
+root disk; nvme8 logged three WRITE timeouts (aborted, status 0) at
+16:13 to 16:14, port b gave no answer for 20 s at the run's start, and
+the run stopped (the host back at the settled setting after it).  Mike:
+no worktrees or bulk IO on tardis2's root disk while runs go ("nvme8 is
+fragile and I think it has been the cause of crashes").  The commits
+were then rewritten with git plumbing, and 1062 was run again as 1064.
+
+| Run | Client's stack | iodepth | M IOPS (ports) | p99 a; b (ms) | Server busy, us a READ | Client busy (busiest) | Client us a READ | Client CPUs min / median / max |
+|---|---|---|---|---|---|---|---|---|
+| t2-r1058, r1060 | B | 64 | 3.065 (mean) | | 15.77 (mean) | | 11.98 (mean) | busiest 88, 89 |
+| t2-r1064 | P | 64 | 3.00 (1.45 / 1.55) | 2.54; 2.41 | 73%, 15.57 | 74% (83%) | 11.84 | 65 / 74 / 83 |
+| t2-r1053 (round 130) | build 541's own | 96 | 3.36 (1.71 / 1.65) | 3.65; 4.69 | 83%, 15.81 | 85% (90%) | 12.14 | |
+| t2-r1063 | P | 96 | 3.50 (1.85 / 1.65) | 3.75; 3.78 | 85%, 15.54 | 83% (88%) | 11.38 | 74 / 84 / 88 |
+
+At iodepth 64, P's one run: -0.14 us of the client's CPU a READ
+against B's two, at 3.00 M against 3.065 (within the spread of these
+runs, 3.03 to 3.10).  At iodepth 96, against round 130's run on build
+541's own client stack (which costs about what B does at iodepth 64,
+12.08 against 11.98 us): **3.50 M against 3.36 (+4.2%), the client's CPU
+a READ 11.38 against 12.14 us (-0.76 us, -6.3%)**, the server's 15.54
+against 15.81.  At that rate the client's ceiling (48 / 11.38 us,
+4.22 M) is now above the server's (64 / 15.54 us, 4.12 M).  No new
+kernel warning in the runs that ran.
+
+**Every count exact under P:** `rpc` and `rpcauthrefresh` both read
+91,559,431 after t2-r1063 and 79,270,502 after t2-r1064, the `proc3`
+counts 50 below (NFSACL).
+
+The client is back on build 541's stack (`cswap131.sh stock` with the
+client-side NFSM: sunrpc `225361815EB170B866C5033`, 16 exports); the
+server at the settled setting.
