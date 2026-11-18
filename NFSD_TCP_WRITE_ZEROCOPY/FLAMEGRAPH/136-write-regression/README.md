@@ -213,3 +213,25 @@ stack is built from the tip (the choice switch at Y in it), and
 `options sunrpc rpciod_per_cpu=N` for each run (twoport.sh holds an
 unbound rpciod `affinity_strict` to its node, as on build 469), each a
 profiled WRITE pass.  The client back on build 541's stack after.
+
+## Build 469's NFS stack on build 541's kernel (plan)
+
+Mike: "yes, build 469's NFS stack against 541 after run 4".  Half the
+question in one step: if build 541's kernel with build 469's NFS modules
+writes about 77.7, the regression is in the NFS modules (and bisectable
+with cbuild and cswap, no reboot); if about 74.9, in the core kernel
+between 7.3.0-rc7 and 7.3.3.
+
+The source, made with git plumbing (no checkout): the tree of tag
+`v7.3.0-0.rc7.2.hs.469.el9` with `patches/client/0001` and `0002`
+applied (`git apply --cached` into a scratch index: tree
+`fb325d7547c50701c9c44df92a30e0a1f776b22f`), its `net/sunrpc`,
+`fs/nfs_common`, `fs/lockd`, `fs/nfs` and their headers
+(`include/linux/sunrpc`, `lockd`, `nfs*`, the sunrpc and nfs trace
+headers).  `cbuild136.sh` builds it on the client against build 541's
+kernel-devel with those headers laid over it, into a module root
+`/root/zc-ckern/H469` for `cswap131.sh`.  Its sunrpc's srcversion
+should be build 469's (`AB674CEE87351D814F68CEE`).  Then two WRITE
+passes with `prof-write.sh`, held with `EXP_CLI_WQ="rpciod/per_cpu=0"`
+(469's rpciod is unbound) and without the per-CPU map's module
+parameter (469 has none).
