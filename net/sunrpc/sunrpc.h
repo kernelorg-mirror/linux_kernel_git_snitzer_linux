@@ -50,4 +50,8 @@ void auth_domain_cleanup(void);
 void svc_sock_update_bufs(struct svc_serv *serv);
 enum svc_auth_status svc_authenticate(struct svc_rqst *rqstp);
 void svc_thread_return_handoff(struct svc_rqst *rqstp);
+struct rpc_stat;
+struct rpc_program;
+void rpc_stat_alloc_version(struct rpc_stat *statp,
+			    const struct rpc_program *program, u32 vers);
 #endif /* _NET_SUNRPC_SUNRPC_H */
