@@ -352,3 +352,31 @@ the tip's tree (`298c732504785`, the choice switch and
 reversed (tree `fa0c06559fe5b`), loaded with `rpciod_per_cpu=N` and
 run with `xprt_percpu_choice_ab=N` (`bstep.sh`'s new `CLI_PRE`): every
 per-CPU placement off.  Two passes, t2-r1098 and t2-r1099.
+
+### Every per-CPU placement off (20:40 to 20:47), then forward from the good step
+
+t2-r1098, the tip's tree with `50eee8803afc5` and `ba5642ee4cac2`
+reversed, `rpciod_per_cpu=N`, `xprt_percpu_choice_ab=N` (read back
+N/N/0): **73.40 GB/s (RERUN), p99 82 / 85 ms**: build 469's tail, not
+its rate.  The rest of the window was read again with every path the
+client modules build from: `06e3c456182e7` only adds an skb helper to
+a header, `2d908b0e2dc60` is the server's READ confinement, and
+`d1ea6a2aeac37` on the client is one `READ_ONCE` in `nfs3proc.c`, a
+`WRITE_ONCE` and two `data_race()`.  A reversal on 541's tree also
+carries every later commit (the sharded task list, the NUMA homing,
+the IOPS rounds), so it cannot isolate the window.
+
+Mike: "yes, do the forward stages from e8f1a72".  From the good step's
+tree, in a scratch index, each of the window's commits in topological
+order applied for the client's files only (`fs/nfs`, `fs/nfs_common`,
+`fs/lockd`, `net/sunrpc` and its headers without `svc*`, the nfs
+headers, the sunrpc trace headers, no KUnit):
+
+- **stage B** (tree `9e95d70f92314`): every commit but the four per-CPU
+  ones; `4ae3b1029cbde` (the rx_loan move) does not apply and is left
+  out, the rest do;
+- **stage A** (tree `532c58c675a6f`): B with `5555163d661a0`,
+  `ba5642ee4cac2`, `50eee8803afc5` and `ccaaf769083fe`.
+
+One pass each, t2-r1100 (B) and t2-r1101 (A).  B good and A bad: the
+four together, in this tree; B bad: one of the others.
