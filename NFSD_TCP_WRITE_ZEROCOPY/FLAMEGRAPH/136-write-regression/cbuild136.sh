@@ -15,6 +15,10 @@ cp -a /usr/src/kernels/$k $R/devel
 # no behaviour), and one after it is left as it is.
 grep -rl "struct mnt_idmap \*" $R/fs/nfs $R/include/linux/nfs*.h 2>/dev/null |
 	xargs -r sed -i -E "s/struct mnt_idmap \*/const struct mnt_idmap */g; s/(const )+const struct mnt_idmap/const struct mnt_idmap/g"
+# Build 541's nfs_common has no nfs_ssc_register(): upstream removed the
+# unused SSC client-ops registration (0a8af02f80b8e).  A tree from before
+# it drops the two calls in fs/nfs/super.c, as that commit does.
+sed -i -E '/^\s*nfs_ssc_(un)?register\(&nfs_ssc_clnt_ops_tbl\);/d' $R/fs/nfs/super.c
 cp -a $R/include/. $R/devel/include/
 for d in fs/lockd; do sed -i '/^\.PHONY: xdrgen/,$d' $R/$d/Makefile 2>/dev/null || true; done
 X=""
