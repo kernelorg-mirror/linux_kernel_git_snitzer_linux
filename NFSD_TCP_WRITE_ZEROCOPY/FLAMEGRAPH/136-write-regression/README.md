@@ -380,3 +380,15 @@ headers, the sunrpc trace headers, no KUnit):
 
 One pass each, t2-r1100 (B) and t2-r1101 (A).  B good and A bad: the
 four together, in this tree; B bad: one of the others.
+
+t2-r1099, the second pass with every per-CPU placement off: **72.43
+GB/s (RERUN), p99 83 / 85 ms**; a transport at t9 held 0 to 195,
+median 22, about 1,500 in all (t2-r1098 alike), half the good tree's
+2,800 to 3,300: fewer WRITEs reach the transports at all.
+
+The forward stages did not build: `aa4297a0999a7` ("sunrpc:
+flat-combine svc TCP reply sends") has `xprtsock.c`'s backchannel send
+call `svc_tcp_send()`, which is in `svcsock.c`, left out with the
+server's files.  The backchannel is NFSv4.1's; an NFSv3 WRITE does not
+take it.  So `aa4297a0999a7` is left out too: stage B is tree
+`34843b6eccb7d`, stage A `eda3d37b69d08`, t2-r1100 and t2-r1101.
