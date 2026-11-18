@@ -1,0 +1,15 @@
+// rfs-map.bt: for 5 s, on each NFS socket (local port 2049): the CPUs
+// where TCP receives its packets (tcp_v4_do_rcv, in softirq or from the
+// socket's backlog) and the CPUs where the call is read (tcp_read_sock,
+// tcp_recvmsg).  FLAMEGRAPH round 128.
+kprobe:tcp_v4_do_rcv
+/((struct sock *)arg0)->__sk_common.skc_num == 2049/
+{
+	@rx[arg0, cpu] = count();
+}
+kprobe:tcp_read_sock, kprobe:tcp_recvmsg
+/((struct sock *)arg0)->__sk_common.skc_num == 2049/
+{
+	@rd[arg0, cpu] = count();
+}
+interval:s:5 { exit(); }
