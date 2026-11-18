@@ -45,15 +45,18 @@ struct sab {
 	struct cache_head	*ipm[SAB_ADDRS];
 	struct cache_head	*ug;
 	unsigned int		upcalls;
+	int			upcall_rv;	/* -EINVAL: no listener */
 };
 
 static struct sab *sab_current;
 
 static int sab_upcall(struct cache_detail *cd, struct cache_head *h)
 {
-	if (sab_current)
-		sab_current->upcalls++;
-	return 0;	/* "queued": the entry stays as it is */
+	if (!sab_current)
+		return 0;
+	sab_current->upcalls++;
+	/* 0: "queued", the entry stays pending; -EINVAL: no one listens */
+	return sab_current->upcall_rv;
 }
 
 static struct cache_detail *sab_cache(struct kunit *test, struct net *net,
@@ -352,6 +355,47 @@ static void sab_half_age(struct kunit *test)
 	sab_release(t);
 }
 
+/*
+ * 4a: past half its age with no listener for the refresh (a unix_gid
+ * when mountd does not manage gids), one call a second goes through to
+ * cache_check() and the rest are lent the entry.
+ */
+static void sab_half_age_no_listener(struct kunit *test)
+{
+	struct sab *t = test->priv;
+	time64_t now = seconds_since_boot();
+	unsigned long c[4];
+	struct sab_delta d;
+	int i;
+
+	sab_install(t);
+	KUNIT_ASSERT_EQ(test, sab_call(t, 0), SVC_OK);
+	sab_release(t);
+	WRITE_ONCE(t->ipm[0]->expiry_time, now + 10);
+	WRITE_ONCE(t->ipm[0]->last_refresh, now - 100);
+	/* an entry checked this second is lent: wait for the next */
+	sab_next_second();
+	t->upcall_rv = -EINVAL;
+	t->upcalls = 0;
+	sab_mark(&d);
+	KUNIT_ASSERT_EQ(test, sab_call(t, 0), SVC_OK);
+	sab_release(t);
+	SAB_EXPECT(test, &d, 0, 1, 1, 0);
+	KUNIT_EXPECT_EQ(test, t->upcalls, 1U);
+	KUNIT_EXPECT_FALSE(test, test_bit(CACHE_PENDING, &t->ipm[0]->flags));
+
+	sab_mark(&d);
+	for (i = 0; i < 3; i++) {
+		KUNIT_ASSERT_EQ(test, sab_call(t, 0), SVC_OK);
+		KUNIT_EXPECT_PTR_EQ(test, t->rqstp->rq_client, t->dom[0]);
+		sab_release(t);
+	}
+	/* at most one second boundary passed in three calls */
+	svcauth_unix_kunit_borrow_counts(c);
+	KUNIT_EXPECT_LE(test, c[1] - d.c0[1], 1UL);
+	KUNIT_EXPECT_GE(test, c[0] - d.c0[0], 2UL);
+}
+
 /* 5: a negative ip_map denies the call and is not kept. */
 static void sab_negative_ip_map(struct kunit *test)
 {
@@ -513,6 +557,7 @@ static struct kunit_case sab_cases[] = {
 	KUNIT_CASE(sab_off),
 	KUNIT_CASE(sab_replaced),
 	KUNIT_CASE(sab_half_age),
+	KUNIT_CASE(sab_half_age_no_listener),
 	KUNIT_CASE(sab_negative_ip_map),
 	KUNIT_CASE(sab_negative_gid),
 	KUNIT_CASE(sab_two_addrs),
