@@ -392,3 +392,14 @@ call `svc_tcp_send()`, which is in `svcsock.c`, left out with the
 server's files.  The backchannel is NFSv4.1's; an NFSv3 WRITE does not
 take it.  So `aa4297a0999a7` is left out too: stage B is tree
 `34843b6eccb7d`, stage A `eda3d37b69d08`, t2-r1100 and t2-r1101.
+
+Stage B without `aa4297a0999a7` (`34843b6eccb7d`) did not build
+either: `eaaa6f347dc3a` puts `svc_pool_kunit.o` in `net/sunrpc/Makefile`
+without its source, which the filter leaves out.  So the window's KUnit
+commits (`eaaa6f347dc3a`, `d51f7b8ba5462`, `9f25eee7b0367`) are left
+out whole, and `fbcdf8dd44cbf` (the server's upcall cache) then does
+not apply on the Makefile and is left out too.  Stage B is tree
+`31ab8c4904ec7`: `e8f1a72bb9b25` with `f49804fcf59e7`, `d1ea6a2aeac37`,
+`f1fc2b1c481cd`, `990e699092959`, `334ea04bd3718`, `7661739461aab`,
+`fadc8f0ee0291` and `4b593427d660b`; stage A `3a085ef0f1dd1`, B with
+the four per-CPU commits.  t2-r1100 and t2-r1101.
