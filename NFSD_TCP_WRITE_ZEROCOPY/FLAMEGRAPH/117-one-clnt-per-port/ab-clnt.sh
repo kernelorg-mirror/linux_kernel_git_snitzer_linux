@@ -1,11 +1,13 @@
 #!/bin/bash
-# ab-clnt.sh <n>:<one|settled> ...: FLAMEGRAPH round 117, one RPC client a
+# ab-clnt.sh <n>:<one<k>|settled> ...: FLAMEGRAPH round 117, one RPC client a
 # port at nconnect 64 (Mike, 18 November: "after round 116, run one mount
 # per port at nconnect 64"), David Flynn's shape (one mount, nconnect 128,
 # one rpc_clnt behind patch 27's shards, 7cc54f28c69fc in build 541).
-# "one": settled-iops.sh with SRV_ALIAS=0 NCONN=64, so a port's four
+# "one<k>": settled-iops.sh with SRV_ALIAS=0 NCONN=<k>, so a port's four
 # filesystems are mounted from its one server address and share one
-# nfs_client, one rpc_clnt and 64 connections (128 in all).  "settled":
+# nfs_client, one rpc_clnt and <k> connections (Mike: "yes, run nconnect
+# 48 then 64": 48 keeps the 96 connections and changes only the
+# rpc_clnts, 64 adds connections, 128 in all).  "settled":
 # settled-iops.sh as held (SRV_ALIAS=1 NCONN=12, eight rpc_clnts, 96).
 # At the load's second 10 the server's established NFS connections are
 # counted a port, and rtc_stats' placed line saved.
@@ -26,7 +28,7 @@ per_cpu() {	# connections a work CPU: least, most
 }
 for run in "$@"; do
 	IFS=: read n spec <<< "$run"
-	[ -n "$n" ] && [ -n "$spec" ] || { say "ab-clnt.sh <n>:<one|settled> ..."; exit 1; }
+	[ -n "$n" ] && [ -n "$spec" ] || { say "ab-clnt.sh <n>:<one<k>|settled> ..."; exit 1; }
 	[ -e /var/tmp/zc-run-logs/t2-r$n ] && { say "t2-r$n exists"; exit 1; }
 	(	W=/var/tmp/zc-run-logs/t2-r$n/run/wire-sec.tsv
 		for i in $(seq 1500); do [ -f $W ] && [ $(wc -l < $W) -ge 10 ] && break; sleep 0.2; done
@@ -35,9 +37,9 @@ for run in "$@"; do
 		  echo "port b $(ss -Htn state established '( sport = :2049 )' src 192.168.1.0/24 | wc -l)"; } > $L/conns-$n.txt ) &
 	sampler=$!
 	case $spec in
-	one)	SRV_ALIAS=0 NCONN=64 ./step.sh $L clnt-$n ./settled-iops.sh run ../FLAMEGRAPH/108-4k-randread/nfs4k.sh $n > $L/t2-r$n.log 2>&1 ;;
+	one[0-9]*) SRV_ALIAS=0 NCONN=${spec#one} ./step.sh $L clnt-$n ./settled-iops.sh run ../FLAMEGRAPH/108-4k-randread/nfs4k.sh $n > $L/t2-r$n.log 2>&1 ;;
 	settled) ./step.sh $L clnt-$n ./settled-iops.sh run ../FLAMEGRAPH/108-4k-randread/nfs4k.sh $n > $L/t2-r$n.log 2>&1 ;;
-	*)	say "spec $spec: one or settled"; exit 1 ;;
+	*)	say "spec $spec: one<k> or settled"; exit 1 ;;
 	esac
 	rc=$?
 	wait $sampler
