@@ -29,6 +29,12 @@
 #                             t2-r995 to r1000; Mike, 18 November: "add
 #                             the spill at weight 1 to settled-iops.sh")
 #                                  EXP_RTC_SPILL_CPUS, EXP_RTC_SPILL_WEIGHT
+#   sunrpc.svc_rtc_send_more Y  the rtc replies batched with MSG_MORE: 16%
+#                             fewer segments out a reply, 2.71 to 2.76 M
+#                             IOPS against 2.67 to 2.70 at N and p99 about
+#                             0.3 ms lower (round 120, t2-r1009 to r1014;
+#                             Mike, 18 November: "worth adding to
+#                             settled-iops.sh")          EXP_RTC_SEND_MORE
 #
 # The two borrows since 18 November (Mike: "add both to settled-iops.sh"):
 # their defaults, which settled.sh does not hold at rest; held here, a
@@ -104,6 +110,7 @@ export EXP_EXPORT_BORROW_SLOTS=${EXP_EXPORT_BORROW_SLOTS:-16}
 export EXP_FH_BORROW_SLOTS=${EXP_FH_BORROW_SLOTS:-48}
 export EXP_RTC_SPILL_CPUS=${EXP_RTC_SPILL_CPUS:-0-7,56-63}
 export EXP_RTC_SPILL_WEIGHT=${EXP_RTC_SPILL_WEIGHT:-1}
+export EXP_RTC_SEND_MORE=${EXP_RTC_SEND_MORE:-Y}
 export EXP_SYSCTL=${EXP_SYSCTL:-"net.core.rmem_max=268435456;net.core.wmem_max=268435456;net.ipv4.tcp_rmem=4096 1048576 268435456;net.ipv4.tcp_wmem=4096 1048576 268435456"}
 case "${1:-}" in
 apply|audit) exec ./settled.sh "$@" ;;
