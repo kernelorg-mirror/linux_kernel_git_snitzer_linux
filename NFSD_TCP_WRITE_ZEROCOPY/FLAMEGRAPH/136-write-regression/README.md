@@ -590,3 +590,16 @@ completions on the home core and round 136's switch and parameter,
 WRITE is back at 78.00, READ at 82.24 and IOPS at 3.63 M.**  At the
 next regroup each revert and the commit it names are dropped together.
 The WRITE mark can go back to 77.6 (`WRITE.md`, TODO 2): Mike's word.
+
+### The reverted stack in the client's updates/
+
+Mike: "yes, put the reverted stack in the client's updates/".  The 17
+modules of `/root/zc-ckern/REV` (built from `9d2c9fcede7b6`, sunrpc
+`2355B960B6A9951899AF6B4`) are in the client's
+`/lib/modules/7.3.3-16.hs.541.canary.el9.x86_64/updates/`, which was
+empty, with a `COMMIT` and a `README` saying how to go back (remove
+them, `depmod -a`); `depmod -a` run, and `cswap131.sh stock` loads them
+(sunrpc read back `2355B960B6A9951899AF6B4`).  The rpm's nfsd does not
+load on this sunrpc ("disagrees about version of symbol"): nfsd is not
+in the build, and the client's `nfs-server` was not running before.
+The WRITE and READ marks are 77.6 since (`6db25b6d56984`).
