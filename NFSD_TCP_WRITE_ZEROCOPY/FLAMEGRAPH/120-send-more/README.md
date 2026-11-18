@@ -95,3 +95,11 @@ the partial tail is pushed by the ACK, in softirq (+0.5 us), not by the
 send.  Fewer segments, about the same transmit work; the sum a READ is
 unchanged, and the rest moves within the noise of the arithmetic (the
 stages are shares of a host that is busier).
+
+### The READ pass with send_more Y
+
+t2-r1016 (Mike: "yes, add a READ pass with send_more Y after the A/B"):
+**PASS, 76.65 GB/s**, no new kernel warning, 2.8 GB/s (3.5%) under
+t2-r1008's 79.47 at N.  Holding the partial tail may cost 1 MiB READs a
+little; send_more is Y only in `settled-iops.sh`, and the passes run at
+N.  `settled.sh apply` after it: the settled setting, send_more N.
