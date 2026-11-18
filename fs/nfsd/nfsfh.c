@@ -823,24 +823,47 @@ out_negative:
  * Returns nfs_ok on success, otherwise an NFS status code is
  * returned.
  */
-__be32 fh_getattr(const struct svc_fh *fhp, struct kstat *stat)
+static __be32 fh_getattr_mask(const struct svc_fh *fhp, struct kstat *stat,
+			      u32 request_mask)
 {
 	struct path p = {
 		.mnt		= fhp->fh_export->ex_path.mnt,
 		.dentry		= fhp->fh_dentry,
 	};
-	struct inode *inode = d_inode(p.dentry);
-	u32 request_mask = STATX_BASIC_STATS;
-
-	if (S_ISREG(inode->i_mode))
-		request_mask |= (STATX_DIOALIGN | STATX_DIO_READ_ALIGN |
-				 STATX_DIO_SEG_BOUNDARY);
 
 	if (fhp->fh_maxsize == NFS4_FHSIZE)
 		request_mask |= (STATX_BTIME | STATX_CHANGE_COOKIE);
 
 	return nfserrno(vfs_getattr(&p, stat, request_mask,
 				    AT_STATX_SYNC_AS_STAT));
+}
+
+__be32 fh_getattr(const struct svc_fh *fhp, struct kstat *stat)
+{
+	u32 request_mask = STATX_BASIC_STATS;
+
+	if (S_ISREG(d_inode(fhp->fh_dentry)->i_mode))
+		request_mask |= (STATX_DIOALIGN | STATX_DIO_READ_ALIGN |
+				 STATX_DIO_SEG_BOUNDARY);
+	return fh_getattr_mask(fhp, stat, request_mask);
+}
+
+/**
+ * __fh_getattr - Retrieve the attributes a reply encodes
+ * @fhp: File handle of target file
+ * @stat: Caller-supplied kstat buffer to be filled in
+ *
+ * Unlike fh_getattr(), does not ask for a regular file's direct I/O
+ * alignment, which no reply encodes: a filesystem may do more work to
+ * report it, and this is called for the post-op attributes of every
+ * NFSv3 reply.
+ *
+ * Returns nfs_ok on success, otherwise an NFS status code is
+ * returned.
+ */
+__be32 __fh_getattr(const struct svc_fh *fhp, struct kstat *stat)
+{
+	return fh_getattr_mask(fhp, stat, STATX_BASIC_STATS);
 }
 
 static __be32 __must_check __fh_fill_pre_attrs(struct svc_fh *fhp)
