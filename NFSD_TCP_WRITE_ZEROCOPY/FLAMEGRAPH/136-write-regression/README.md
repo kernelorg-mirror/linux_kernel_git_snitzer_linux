@@ -632,3 +632,7 @@ At iodepth 128 (Mike: "run the 4K IOPS test at iodepth 128"): t2-r1126
 busiest CPU 100%), the client 90% (98%), no new kernel warning.  A
 third more in flight than at 96 (3.51 to 3.63 M) gives 1 to 4% more
 READs and about 10% longer completions.
+
+At iodepth 128 again: t2-r1127 **3.56 M IOPS** (1.83 / 1.72 M), p99
+3.69 / 3.85 ms, 15.82 / 11.87 us of CPU a READ, no new kernel warning.
+Iodepth 128 reads 3.56 to 3.65 M against 3.51 to 3.63 at 96: no gain.
