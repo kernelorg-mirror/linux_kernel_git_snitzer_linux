@@ -2863,7 +2863,7 @@ void nfsd_fh_borrow_fill(struct nfsd_exp_slot *s, struct svc_export *exp,
  * nfsd_exp_slots_mutex, so it never runs beside a drain.  Returns whether
  * any slot is still registered.
  */
-static bool nfsd_fh_slots_sweep(time64_t now, unsigned int ttl)
+VISIBLE_IF_KUNIT bool nfsd_fh_slots_sweep(time64_t now, unsigned int ttl)
 {
 	struct nfsd_fh_slot_ent *f;
 	struct nfsd_exp_slot *s;
@@ -2906,6 +2906,14 @@ static void nfsd_fh_slots_age(struct work_struct *work)
 	if (nfsd_fh_slots_sweep(seconds_since_boot(), ttl))
 		queue_delayed_work(system_dfl_wq, &nfsd_fh_age_work, ttl * HZ);
 }
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* Set fh_borrow_ttl, so that the suites keep the sweep out of a case. */
+unsigned int nfsd_fh_borrow_kunit_ttl(unsigned int ttl)
+{
+	return xchg(&fh_borrow_ttl, ttl);
+}
+#endif
 
 /**
  * nfsd_exp_borrow_shutdown - stop the file handle sweep as nfsd unloads
