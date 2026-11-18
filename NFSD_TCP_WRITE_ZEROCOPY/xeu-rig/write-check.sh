@@ -3,10 +3,13 @@
 # change made for reads that touches a path WRITEs also take (the
 # kernel's network, SUNRPC, nfsd, block or NVMe paths, xeu, or
 # settled.sh) is checked with one two-port write run on all eight
-# drives at the settled setting.  It passes at 74.6 GB/s or more with no
-# drive stepped down and no new kernel warning; below 74.6 it is run once
-# more (RERUN), and below 74.6 twice is a regression.  The mark is 74.6
-# since 18 November (Mike: "just lower to 74.6, this is a known issue we
+# drives at the settled setting.  It passes at 77.6 GB/s or more with no
+# drive stepped down and no new kernel warning; below 77.6 it is run once
+# more (RERUN), and below 77.6 twice is a regression.  The mark is 77.6
+# again since 18 November, late (Mike: "yes, put the WRITE mark back to
+# 77.6"), after FLAMEGRAPH round 136 found the client's regression (the
+# per-CPU transport choice, reverted: 78.00, t2-r1118).  It was 74.6
+# from 18 November (Mike: "just lower to 74.6, this is a known issue we
 # need to get back to later.. IOPS is what matters for now"), after the
 # export borrow's build read 74.55 and 74.98 (FLAMEGRAPH round 110); it
 # was 75.0 from 17 November (Mike: "for now we must tolerate that WRITE has
@@ -54,7 +57,7 @@ hung=$(diff $O/dmesg.0 $O/dmesg.1 | grep -v 'tracing to debugfs is deprecated' |
 gbs=$(grep '^total' $O/run.log | grep -oE '[0-9]+\.[0-9]+' | head -1)
 down=$(grep -q 'no drive stepped down' $O/run.log && echo 0 || echo 1)
 v=$(awk -v g="$gbs" -v d=$down -v h=$hung 'BEGIN {
-	if (g == "" || d || h) print "FAIL"; else if (g >= 74.6) print "PASS";
+	if (g == "" || d || h) print "FAIL"; else if (g >= 77.6) print "PASS";
 	else print "RERUN" }')
 say "t2-r$n write check: $v | $(grep '^total' $O/run.log) | $([ $down = 0 ] && echo 'no drive stepped down' || echo 'a drive stepped down') | new kernel warnings $hung"
 grep -E '^  write:|^port |drives of' $O/run.log | sed 's/^/    /'
