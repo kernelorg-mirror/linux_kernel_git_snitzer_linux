@@ -21,7 +21,7 @@ for run in "$@"; do
 	else ../FLAMEGRAPH/136-write-regression/prof-write.sh $n; fi > /dev/null 2>&1
 	got=$($SSHC "cat $P; echo Y > $P")
 	O=$L/t2-r$n
-	say "t2-r$n choice $v${pin:+ $pin} (read $got): $(grep -oE 'write check: [A-Z]+ \| total [0-9.]+ GB/s' $O/write-check.out) | p99 $(awk '/^  write:/ {printf "%s%s", n++ ? "/" : "", $(NF-4)}' $O/run.log) ms | $(grep -oE 'new kernel warnings [0-9]+' $O/write-check.out)"
+	say "t2-r$n choice $v${pin:+ $pin} (read $got): $(grep -oE 'write check: [A-Z]+ \| total [0-9.]+ GB/s' $O/write-check.out) | p99 $(awk '/^  write:/ {printf "%s%s", n++ ? "/" : "", $(NF-5)}' $O/run.log) ms | $(grep -oE 'new kernel warnings [0-9]+' $O/write-check.out)"
 	for t in 6 9 12; do say "  t$t queues: $(awk '/^sending_q_len/ {split($0,a,"="); print a[2]}' $O/xprt-$t.txt | sort -n | awk '{a[NR]=$1; s+=$1} END {printf "sum %d, min %d median %d max %d", s, a[2], a[int(NR/2)+1], a[NR]}')"; done
 done
 say "ab-choice done"
