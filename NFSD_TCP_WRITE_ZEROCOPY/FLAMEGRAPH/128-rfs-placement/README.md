@@ -54,3 +54,9 @@ thread's wakeup and switch for a call the work item could serve once
 the rest arrives (`finish_task_switch` 0.21 us a READ in t2-r1045),
 and the flow's receive steered away and back.  How many READ calls take
 it in an IOPS run is not measured yet (rtc_stats before and after one).
+
+## The no_peek fallbacks in one IOPS run (Mike: "measure the no_peek fallbacks in one IOPS run")
+
+`/sys/kernel/debug/nfsd/rtc_stats` read before and after one
+`settled-iops.sh` run of nfs4k.sh, t2-r1047; the counts' differences
+against the run's calls offered (`read_offered`) and diversions.
