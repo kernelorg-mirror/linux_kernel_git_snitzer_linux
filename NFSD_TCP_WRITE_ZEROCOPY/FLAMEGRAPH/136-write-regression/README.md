@@ -453,3 +453,57 @@ others hold 200 (t2-r1098, every per-CPU placement off: 0 / 22 / 200,
 about 1,500 in all) and the rate is lower still.  With it at Y (1), the
 transports stay full but 0 to 300 apart, and a WRITE waits behind the
 deepest: p99 150 to 170 ms.
+
+### A balanced per-CPU choice, tried and dropped (21:18 to 21:30)
+
+Mike: "yes, write the fix and run the passes".  The change tried, built
+on the client at W=1 without warnings and run from a commit since
+dropped (Mike: "I don't want code churn in the commit history for
+false-starts"): a CPU's choice compared its own transport with one other
+active transport, taken in turn from a per-CPU cursor over the switch's
+active transports (kept in the CPU map), and sent the task to the other
+when its own held more than `xprt_percpu_slack` (16) tasks beyond it, in
+place of the 64-task spill; and the home CPU's receive work behind a
+switch, `xs_recv_on_home_cpu` (default Y).  `r136fix.sh` ran it.
+
+| Run | Client stack (on 541's kernel) | WRITE GB/s | Mean / p99 (ms) | Client CPUs busy, mean | A transport at t9: min / median / max (sum) |
+|---|---|---|---|---|---|
+| t2-r1100 | B (round-robin, balanced) | 77.61 | 54.5 / 83 | 49% | 92 / 98 / 104 (3136) |
+| t2-r1102 | B + the per-CPU choice | 72.83 (RERUN) | 57.9 / 165 | 63% | 0 / 90 / 303 (3321) |
+| t2-r1106 | the tip + the balanced choice, receive on the home CPU | 70.38 (RERUN) | 60.4 / 169 | 40% | 67 / 101 / 141 (3268) |
+| t2-r1107 | the same, receive where it arrives | 70.48 (RERUN) | / 154 | 41% | 49 / 101 / 131 (3133) |
+
+What was found:
+
+- **Even transports are not enough.**  The transports held within
+  about 2x of each other instead of 0 to 300, and the rate fell
+  further, with the same tail.
+- **Where the receive work runs does not matter to WRITEs** (70.38 Y,
+  70.48 N).
+- **The client's CPUs are not the limit**: 40 to 63% busy in every
+  run, the good one included.
+- **Not a task transmitting on a transport homed on another CPU**: the
+  per-CPU choice alone (t2-r1102), where a task almost always transmits
+  on its own CPU's transport, lost as much.  The balanced choice adds
+  such transmits and may cost a little more (70.4 against 72.8).
+- **What fits every run: the pooling of round-robin.**  The pass runs
+  16 fio jobs a port, each pinned to a CPU (`cpus_allowed` 0-23 for
+  port a), each with 256 WRITEs of 512 KiB in flight (8 MiB at
+  iodepth 16).  Round-robin deals every job's WRITEs over all 16
+  connections, so each carries an equal share of every job.  The
+  per-CPU choice puts a job's WRITEs in its CPU's connection, and the
+  map gives a NUMA node's CPUs their share of the connections: a
+  connection with two jobs doubles their completion time (the p99 from
+  83 to 165 ms) while others run short.  Round-robin without its
+  balancing (the DROP switch at N, t2-r1081 and r1083: 72.5) loses the
+  rate too, with the tail back.
+
+The READ pass with the balanced choice (t2-r1108, receive Y) ran before
+the chain was stopped; the IOPS runs (r1109, r1110) and the READ pass
+with receive N (`r136fix-readn.sh`, r1111) did not run.
+
+Next (Mike: "yes, revert the fix and write the policy modparam"): the
+transport policy of an nconnect switch as a sunrpc parameter, the
+per-CPU choice or round-robin with its queue-length balancing restored
+as it was before `5555163d661a0`; WRITE, READ and IOPS on each, and the
+default set to what measures best.
