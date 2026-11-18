@@ -50,3 +50,40 @@ W=1.
 
 The client has perf and debuginfo since 18 November (Mike), so its
 kernel's symbols resolve.
+
+## The passes (18 November, 00:48 to 00:56)
+
+Server build 541 with `/var/tmp/svcstack-541-authborrow/stack` (sunrpc
+`E038753F5CE7FE08331B07F`, nfsd `528EBC791C7D3FAEB133919`,
+`svcauth_borrow` Y, `export_borrow_slots` 16), client build 541.
+
+| Run | | GB/s | Result | ip_map hits / fills | gid hits / fills |
+|---|---|---|---|---|---|
+| t2-r935 | WRITE pass | 75.18 | **PASS** (mark 74.6) | 5.15 M / 180 | 5.15 M / 98 |
+| t2-r936 | READ pass (io_uring, rsize 256 KiB) | 79.89 | **PASS** (mark 71.5) | 18.43 M / 521 | 8.55 M / 9.88 M |
+
+No drive stepped down and no new kernel warning in either.
+
+- **WRITE 75.18 GB/s**: port a 37.38, port b 37.80, the drives 9.2 to
+  9.5 GB/s each at 96 to 97% busy, ring drops 126 to 131.  The best
+  WRITE pass of the night (74.55 to 75.25 on the stacks before it).
+- **READ 79.89 GB/s**: 39.93 and 39.97 a port, the drives 9.9 to 10.1
+  GB/s each at 100% busy.  The best READ pass of the night (79.22 to
+  79.65 before).  Against the frame: 76% of what the drives read with
+  local fio (104.58 GB/s), 81% of what the ports send with iperf3 `-Z`
+  (98.31); the pass measures no memory or Send-Q.
+
+**The gid borrow misses half of every two minutes on this host.**
+mountd runs without manage-gids (`/etc/nfs.conf`: `manage-gids=n`, the
+default) and never answers an auth.unix.gid upcall, so each uid's entry
+is one the kernel negates itself, for `CACHE_NEW_EXPIRY` (120 s).  Past
+half that age the borrow's freshness rule misses so that cache_check()
+starts a refresh, and the refresh stays pending, unanswered, until the
+entry expires: every call of those 60 s misses and refills.  The READ
+pass ran through such a window (9.88 M gid fills); the WRITE pass did
+not (98).  The fix to make after the A/B: an entry whose refresh upcall
+is already pending (`CACHE_PENDING`) is fresh until it expires, since a
+miss then does nothing cache_check() does not.  The export borrow has
+the same rule (mountd answers its upcalls, so it matters less there).
+The A/B below runs with the gap in place; its fill counts show its
+cost.
