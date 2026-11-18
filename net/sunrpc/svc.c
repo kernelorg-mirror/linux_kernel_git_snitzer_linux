@@ -2315,6 +2315,9 @@ int svc_stat_alloc_counts(struct svc_stat *statp)
 				  GFP_KERNEL);
 	if (!statp->vs_count)
 		return -ENOMEM;
+	statp->pcpu = alloc_percpu(struct svc_stat_pcpu);
+	if (!statp->pcpu)
+		goto err;
 
 	for (i = 0; i < prog->pg_nvers; i++) {
 		if (!prog->pg_vers[i])
@@ -2344,6 +2347,12 @@ void svc_stat_free_counts(struct svc_stat *statp)
 	if (!statp->vs_count)
 		return;
 
+	/* the counts so far stay in the plain fields */
+	statp->netcnt = svc_stat_netcnt(statp);
+	statp->nettcpcnt = svc_stat_nettcpcnt(statp);
+	statp->rpccnt = svc_stat_rpccnt(statp);
+	free_percpu(statp->pcpu);
+	statp->pcpu = NULL;
 	for (i = 0; i < prog->pg_nvers; i++)
 		free_percpu(statp->vs_count[i]);
 	kfree(statp->vs_count);
@@ -2501,7 +2510,7 @@ svc_process_common(struct svc_rqst *rqstp)
 	/* Syntactic check complete */
 	if (serv->sv_stats)
 		/* data_race: best-effort aggregate statistics counter. */
-		data_race(serv->sv_stats->rpccnt++);
+		svc_stat_inc(serv->sv_stats, rpccnt);
 	trace_svc_process(rqstp, progp->pg_name);
 
 	aoffset = xdr_stream_pos(xdr);

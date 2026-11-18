@@ -6521,7 +6521,7 @@ again:
 
 	svc_xprt_copy_addrs(rqstp, &svsk->sk_xprt);
 	if (serv->sv_stats)
-		serv->sv_stats->nettcpcnt++;
+		svc_stat_inc(serv->sv_stats, nettcpcnt);
 
 	svc_sock_secure_port(rqstp);
 	svc_xprt_received(rqstp->rq_xprt);
