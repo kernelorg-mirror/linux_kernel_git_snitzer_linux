@@ -107,3 +107,46 @@ with `grub2-set-default` when the round wants it.
   settled setting.
 
 Then `write-check.sh 1078` and `prof-write.sh 1079`.
+
+### Build 469 against build 541, the tip's server unchanged (18:45 to 18:50)
+
+| | t2-r1077, build 541 (before) | t2-r1078, build 469 | t2-r1079, build 469 (profiled) |
+|---|---|---|---|
+| WRITE pass | 74.79 (37.14 / 37.65) | **77.69** (38.93 / 38.77) | **77.70** |
+| fio completion mean / p99 (ms) | 57.0 / 156 | 54.5 / 83 | |
+| server ring drops a / b (10 s) | 85 / 68 | 276 / 273 | |
+| client busy (node 0 / 1), server busy | 43 / 42%, 25% | | 46 / 46%, 28% |
+| client memory, a byte written | 159.0 GB/s, 2.13 | | 167.9 GB/s, 2.16 |
+| client Send-Q, 32 sockets (t6/t9/t12) | 50.0 / 52.9 / 50.2 MB | | 53.0 / 52.2 / 55.6 MB |
+| client cwnd min / median / max | 32 / 41 / 57 | | 32 / 35-40 / 55-61 |
+| **RPCs waiting to send** (t6/t9/t12) | **4,042 / 4,398 / 4,083** | | **2,825 / 2,944 / 2,973** |
+| **most on one transport** | **268 / 315 / 279** | | **97 / 102 / 102** |
+| RPCs in flight | 147 to 161 | | 158 to 169 |
+
+Build 469 against today's server writes what it wrote in rounds 106
+and 107: **the 3 GB/s is the client's.**  The sockets look the same
+on both (the same unsent bytes, the same cwnd), the server is not
+busier than 28% on either, and the client's profile is the same list
+in the same order (fio's `get_io_u`, the list checks, `nfs_page_create`,
+`nfs_scan_commit_list`, pinning, locks) within a few tenths of a
+percent.  What differs is **how the WRITEs are spread over the 32
+transports** (each transport's `sending_q_len` at second 9, sorted):
+
+- build 541: 0 3 10 32 37 49 67 75 78 81 100 103 106 106 129 129 145
+  146 159 163 163 169 170 177 178 184 191 191 229 235 236 242 315
+- build 469: 0 0 85 85 86 86 87 87 88 88 88 89 89 89 90 90 90 90 90 90
+  92 92 94 94 94 98 98 98 98 99 99 99 100 102
+
+(each list has the gssproxy socket's 0 too).  Build 469 deals the
+WRITEs round-robin and every transport holds 85 to 102; build 541's
+per-CPU map (`5555163d661a0`, "SUNRPC: give each CPU its own transport
+under nconnect") puts each on its submitting CPU's transport, and the
+transports hold 0 to 315.  A WRITE behind 315 waits three times as long
+as one behind 100: the p99 is 156 ms on 541 against 83 on 469, at
+nearly the same mean.  The map spills to round-robin only once a
+transport holds 64 tasks and the round-robin choice holds fewer than
+half as many, which at 100 to 300 queued a transport rarely holds.
+
+The 469 runs' nstat deltas (second 4 to 14): the client retransmitted
+955 segments of 115 million and timed out once; the server none to
+speak of.
