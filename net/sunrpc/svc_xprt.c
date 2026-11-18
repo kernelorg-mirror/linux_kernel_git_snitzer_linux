@@ -17,6 +17,7 @@
 #include <linux/sunrpc/addr.h>
 #include <linux/sunrpc/stats.h>
 #include <linux/sunrpc/svc_xprt.h>
+#include <linux/kernel_stat.h>
 #include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/xprt.h>
 #include <linux/sunrpc/bc_xprt.h>
@@ -1229,6 +1230,8 @@ static DEFINE_PER_CPU(u64, svc_rtc_send_more_n);
  * when its transport is freed.
  */
 static DEFINE_PER_CPU(atomic_t, svc_rtc_placed);
+/* connections svc_rtc_rebalance() moved */
+static atomic_long_t svc_rtc_rebalanced;
 
 #define svc_rtc_stat_inc(field)	this_cpu_inc(svc_rtc_stats.field)
 #define svc_rtc_stat_add(field, n) this_cpu_add(svc_rtc_stats.field, (n))
@@ -1318,6 +1321,8 @@ void svc_rtc_stats_show(struct seq_file *m)
 		for_each_possible_cpu(cpu)
 			undiverted += READ_ONCE(per_cpu(svc_rtc_send_more_n, cpu));
 		seq_printf(m, "send_more %llu\n", undiverted);
+		seq_printf(m, "rebalanced %ld\n",
+			   atomic_long_read(&svc_rtc_rebalanced));
 		seq_puts(m, "placed");
 		for_each_possible_cpu(cpu) {
 			int n = atomic_read(per_cpu_ptr(&svc_rtc_placed, cpu));
@@ -2128,6 +2133,7 @@ static void svc_rtc_handoff_drain(struct svc_serv *serv);
 static void svc_rtc_pool_free(struct svc_rtc_pool *pool);
 static void svc_rtc_pool_fill(struct work_struct *work);
 static void svc_rtc_pool_decay(struct work_struct *work);
+static void svc_rtc_rebalance(struct work_struct *work);
 
 /*
  * One work item per connection: finish completed async calls (encode and
@@ -2348,6 +2354,14 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 	INIT_LIST_HEAD(&pool->all);
 	INIT_WORK(&pool->fill, svc_rtc_pool_fill);
 	INIT_DELAYED_WORK(&pool->decay, svc_rtc_pool_decay);
+	INIT_DELAYED_WORK(&pool->rebalance, svc_rtc_rebalance);
+	pool->rb_busy = kcalloc(nr_cpu_ids, sizeof(*pool->rb_busy), GFP_KERNEL);
+	if (!pool->rb_busy) {
+		percpu_counter_destroy(&pool->parked);
+		kfree(pool->shard);
+		kfree(pool);
+		return -ENOMEM;
+	}
 
 	mutex_lock(&svc_rtc_mutex);
 	ret = svc_rtc_serv_prepare(serv);
@@ -2360,8 +2374,11 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 	mutex_unlock(&svc_rtc_mutex);
 	if (ret) {
 		percpu_counter_destroy(&pool->parked);
+		kfree(pool->rb_busy);
 		kfree(pool->shard);
 		kfree(pool);
+	} else {
+		queue_delayed_work(system_dfl_wq, &pool->rebalance, HZ);
 	}
 	/* The pool stays empty until svc_rtc_pool_arm(). */
 	return ret;
@@ -2417,6 +2434,7 @@ void svc_rtc_unregister(struct svc_serv *serv)
 		cancel_work_sync(&pool->fill);
 		/* After the fill: it may queue the decay. */
 		cancel_delayed_work_sync(&pool->decay);
+		cancel_delayed_work_sync(&pool->rebalance);
 		svc_rtc_pool_free(pool);
 	}
 }
@@ -3564,6 +3582,7 @@ static void svc_rtc_pool_free(struct svc_rtc_pool *pool)
 		svc_rtc_rqst_destroy(pool->ops, r);
 	}
 	percpu_counter_destroy(&pool->parked);
+	kfree(pool->rb_busy);
 	kfree(pool->shard);
 	kfree(pool);
 }
@@ -3758,6 +3777,99 @@ static void svc_rtc_pool_decay(struct work_struct *work)
 		svc_rtc_pool_decay_arm(pool);
 	mutex_unlock(&svc_rtc_mutex);
 	svc_rtc_pool_size(serv);
+}
+
+/*
+ * svc_rtc_rebalance_ms and svc_rtc_rebalance_gap: placement counts work
+ * items, and a work item is a whole connection, so the CPUs it spreads
+ * them over end up unevenly busy (one connection on one CPU, two on the
+ * next, a spill CPU's own softirqs on top).  Every svc_rtc_rebalance_ms
+ * (0, the default, is off) the pool compares the CPUs the work items may
+ * run on (svc_rtc_cpus and the spill CPUs; every online CPU when
+ * svc_rtc_cpus is empty) by how busy each was since the last pass, and
+ * moves one connection from the busiest that holds any to the least busy,
+ * when the gap is more than a connection's share of the busiest (its busy
+ * over its connections) plus svc_rtc_rebalance_gap points: a move that
+ * would only trade which CPU is the busiest is not made.  The work item
+ * runs where the connection's CPU says at its next queue.
+ */
+static unsigned int svc_rtc_rebalance_ms __read_mostly;
+module_param(svc_rtc_rebalance_ms, uint, 0644);
+MODULE_PARM_DESC(svc_rtc_rebalance_ms,
+		 "Milliseconds between moves of a run-to-completion connection off the busiest CPU (0: off)");
+static unsigned int svc_rtc_rebalance_gap __read_mostly = 10;
+module_param(svc_rtc_rebalance_gap, uint, 0644);
+MODULE_PARM_DESC(svc_rtc_rebalance_gap,
+		 "Points of busy past a connection's share before a connection is moved (default 10)");
+static u64 svc_rtc_cpu_busy_ns(int cpu)
+{
+	struct kernel_cpustat kcs;
+
+	kcpustat_cpu_fetch(&kcs, cpu);
+	return kcs.cpustat[CPUTIME_USER] + kcs.cpustat[CPUTIME_NICE] +
+	       kcs.cpustat[CPUTIME_SYSTEM] + kcs.cpustat[CPUTIME_IRQ] +
+	       kcs.cpustat[CPUTIME_SOFTIRQ] + kcs.cpustat[CPUTIME_STEAL];
+}
+
+static void svc_rtc_rebalance(struct work_struct *work)
+{
+	struct svc_rtc_pool *pool = container_of(to_delayed_work(work),
+						 struct svc_rtc_pool,
+						 rebalance);
+	unsigned int ms = READ_ONCE(svc_rtc_rebalance_ms);
+	const struct cpumask *allowed = svc_rtc_allowed();
+	const struct cpumask *spill = svc_rtc_spill();
+	struct svc_serv *serv = pool->serv;
+	unsigned int hi_pct = 0, lo_pct = UINT_MAX, share;
+	int cpu, hi = -1, lo = -1, placed;
+	u64 now = ktime_get_ns(), wall = now - pool->rb_when;
+	struct svc_xprt *xprt;
+	bool first = !pool->rb_when;
+
+	pool->rb_when = now;
+	for_each_online_cpu(cpu) {
+		u64 busy = svc_rtc_cpu_busy_ns(cpu);
+		u64 delta = busy - pool->rb_busy[cpu];
+		unsigned int pct;
+
+		pool->rb_busy[cpu] = busy;
+		if (first || !ms || !wall)
+			continue;
+		if (allowed && !cpumask_test_cpu(cpu, allowed) &&
+		    !(spill && cpumask_test_cpu(cpu, spill)))
+			continue;
+		pct = min_t(u64, div64_u64(delta * 100, wall), 100);
+		placed = atomic_read(per_cpu_ptr(&svc_rtc_placed, cpu));
+		if (placed > 0 && pct > hi_pct) {
+			hi_pct = pct;
+			hi = cpu;
+		}
+		if (pct < lo_pct) {
+			lo_pct = pct;
+			lo = cpu;
+		}
+	}
+	if (hi < 0 || lo < 0 || hi == lo)
+		goto out;
+	placed = atomic_read(per_cpu_ptr(&svc_rtc_placed, hi));
+	share = hi_pct / max(placed, 1);
+	if (hi_pct - lo_pct <= share + READ_ONCE(svc_rtc_rebalance_gap))
+		goto out;
+	spin_lock_bh(&serv->sv_lock);
+	list_for_each_entry(xprt, &serv->sv_tempsocks, xpt_list) {
+		struct svc_rtc_conn *conn = READ_ONCE(xprt->xpt_rtc);
+
+		if (conn && READ_ONCE(conn->cpu) == hi &&
+		    !test_bit(XPT_DEAD, &xprt->xpt_flags)) {
+			svc_rtc_set_cpu(conn, lo);
+			atomic_long_inc(&svc_rtc_rebalanced);
+			break;
+		}
+	}
+	spin_unlock_bh(&serv->sv_lock);
+out:
+	queue_delayed_work(system_dfl_wq, &pool->rebalance,
+			   ms ? msecs_to_jiffies(ms) : HZ);
 }
 
 #if IS_ENABLED(CONFIG_KUNIT)
