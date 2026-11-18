@@ -16,3 +16,22 @@ CPU and seven a ring CPU.
         ./step.sh /var/tmp/zc-run-logs/r118 nc-${r%%:*} \
             ./settled-iops.sh run ../FLAMEGRAPH/108-4k-randread/nfs4k.sh ${r%%:*}::${r#*:}
     done
+
+## Result (18 November, 05:51 to 05:57): stopped after one run
+
+| Run | nconnect | Connections | M IOPS (ports) | p99 a; b (ms) | Work CPUs (max) | Ring CPUs (max) | Server busy |
+|---|---|---|---|---|---|---|---|
+| t2-r1003 | 64 | 512 | 2.22 (1.11 / 1.11) | 8.29; 8.98 | 68.1% (100%) | 82.5% (100%) | 71% |
+
+20% below the spill's 2.755 M at nconnect 12 (round 116), p99 more than
+twice as long.  At about eight connections a CPU the spill's weight of 1
+is next to nothing: the ring CPUs take nearly as many as a work CPU and
+saturate, as round 115's 0-63 did.  Mike: "ok clearly nconnect 64 or 128
+are way too high"; the rest were not run.
+
+t2-r1004 (nconnect 12) was killed in its setup: the loop was stopped with
+the agent's TaskStop, which killed the whole process group, the run with
+it, and twoport.sh's EXIT cleanup did not run.  The client's four port-a
+mounts, the four alias addresses, the client's workqueue scope (cpu) and
+its irqbalance (off) were put back by hand, then `settled.sh apply`: the
+settled setting.  It ran no load.
