@@ -46,3 +46,36 @@ the run is made with that value.  In turns, 16 first:
 
     cd xeu-rig; ../FLAMEGRAPH/110-export-borrow/ab-borrow.sh \
         923:16 924:0 925:16 926:0 927:16 928:0
+
+### Results (17 November, 23:37 to 23:57)
+
+Server build 541 with the stack from `5420d7f0a7dc7` (nfsd
+`9E859F33630085ECFA66EC1`), client build 541, `settled-iops.sh`:
+iodepth 64, nconnect 12, cache_shard.  Logs in
+`/var/tmp/zc-run-logs/r110/`, the borrow counters' change for each run
+in `/var/tmp/zc-run-logs/541/ab-borrow.log`.
+
+| Run | slots | M IOPS (ports) | ms mean / p99 | Server busy (busiest) | Client busy (busiest) | hits | fills | evicts | skips |
+|---|---|---|---|---|---|---|---|---|---|
+| t2-r923 | 16 | 2.48 (1.25 / 1.23) | 1.23 / 4.75 | 72% (93%) | 70% (80%) | 66.06 M | 10,416 | 0 | 0 |
+| t2-r924 | 0 | 2.47 (1.23 / 1.24) | 1.25 / 4.88 | 72% (94%) | 70% (78%) | 0 | 0 | 0 | 65.85 M |
+| t2-r925 | 16 | 2.47 (1.24 / 1.23) | 1.24 / 4.62 | 72% (94%) | 70% (75%) | 65.77 M | 10,306 | 0 | 0 |
+| t2-r926 | 0 | 2.47 (1.22 / 1.25) | 1.25 / 4.82 | 72% (95%) | 70% (80%) | 0 | 0 | 0 | 65.85 M |
+| t2-r927 | 16 | 2.47 (1.23 / 1.24) | 1.25 / 4.49 | 72% (99%) | 70% (79%) | 65.82 M | 10,281 | 0 | 0 |
+| t2-r928 | 0 | 2.48 (1.25 / 1.23) | 1.22 / 4.55 | 72% (95%) | 70% (77%) | 0 | 0 | 0 | 66.04 M |
+
+ms mean / p99 is port a's.  No new kernel warnings in any run, no
+bad_return, 48 drains a run (the restarts' cache flushes).
+
+- **The fix does what it is for: 16 entries hit 99.98% of NFSv3 file
+  handles** (about 10,300 fills a run, the first borrow of each of the
+  eight exports in each slot, and no evictions), against 60 to 62% with
+  one slot a thread (t2-r920 to r922).  0 disables it: every file
+  handle is a skip.
+- **It changes nothing measurable at this shape: 2.47 to 2.48 M IOPS
+  on both sides**, the same latency, 72% of the server and 70% of the
+  client.  The one-slot borrow on the same tip read 2.48 to 2.51
+  (t2-r920 to r922), within the same spread.  nfsd's busiest work CPU
+  is at 93 to 99% on both sides: the limit is elsewhere, and what the
+  borrow saves is not on it.  A profile at 16 and at 0 (`prof-borrow.sh`,
+  t2-r929 and r930) is to show what that limit is and what a hit costs.
