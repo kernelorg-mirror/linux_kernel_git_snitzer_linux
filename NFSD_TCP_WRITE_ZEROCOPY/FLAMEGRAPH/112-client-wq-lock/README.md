@@ -22,3 +22,64 @@ the client from the load's second 8, one after another: `perf record -a
 -g` (6 s), `perf lock contention -a -b -v` (6 s, by caller with stacks),
 `perf lock contention -a -b -l` (6 s, by lock).  Its rate is taken
 under the probes.
+
+## Results (t2-r965, 18 November, 02:47)
+
+**2.52 M IOPS (1.26 / 1.26 M) under the probes**, 1.21 / 4.42 ms, server
+71% busy (busiest 94%), client 71% (busiest 81%), no new kernel warning.
+Reports in `/var/tmp/zc-run-logs/t2-r965/` (`cli-lock-callers.txt`,
+`cli-lock-addr.txt`, `cli-self.txt`, `cli-children.txt`, `cli-wq.txt`).
+(`cli-spin-callers.txt` came out empty: the caller report's options
+matched nothing; the lock tracer below answers it.)
+
+### Which lock: six unbound workqueue pools
+
+`perf lock contention -l` puts almost all of it on six spinlocks in
+`kmalloc-1k` objects, about 0.93 M contentions and 1.25 s of waiting each
+in the 6 s, the rest far behind (`kmem_cache_node` 0.08 M, the slab).
+A bound pool is static per-CPU data, not slab; six `kmalloc-1k` locks are
+six unbound `worker_pool`s, cache_shard's six shards of 8 CPUs.
+
+### Who takes it
+
+| Caller (`perf lock contention -v`) | Contended | Waited | Avg |
+|---|---|---|---|
+| `worker_thread` (`kernel/workqueue.c:3545`), a worker between items | 2.39 M | 3.47 s | 1.45 us |
+| `queue_work_on` from `__rpc_execute` (the task's release) | 1.51 M | 2.39 s | 1.58 us |
+| `kthread` (a worker's loop) | 0.33 M | 0.42 s | 1.27 us |
+| `__slab_free` from RCU's `mempool_free` | 0.10 M | 0.23 s | 2.24 us |
+| `try_to_wake_up` from `__queue_work` and `process_one_work` | 0.16 M | 0.16 s | |
+| `queue_work_on` from `tcp_data_queue` (xprtiod's receive work) | 0.016 M | 0.02 s | |
+
+About 6.3 s of waiting in 6 s on 48 CPUs, 2.2% of the client; in
+samples, `_raw_spin_lock` 5.73% and `native_queued_spin_lock_slowpath`
+4.18% (self), `queue_work_on` 6.17% with children.
+
+### Whose work: nfsiod's release of every READ
+
+In build 541 (`4c8aa21d29987`) rpciod is per-CPU (`WQ_PERCPU`, the
+canary-WIP change) and xprtiod and nfsiod unbound.  The requeue in
+`__rpc_execute()` is the task's release: `rpc_release_task()` ->
+`rpc_final_put_task(task, task->tk_workqueue)` queues
+`rpc_async_release`, and an NFS READ's `tk_workqueue` is
+`nfsiod_workqueue` (`fs/nfs/pagelist.c:856`).  So every 4 KiB READ queues
+one small item to nfsiod (`rpc_async_release` 3.76% with children,
+`nfs_direct_read_completion` 3.32% in it), about 15 M in the 6 s.  nfsiod
+is `WQ_UNBOUND` without `WQ_SYSFS` (so it is not in `cli-wq.txt`), and
+unbound workqueues with the same attributes share pools: nfsiod's
+releases and xprtiod's receive work run on the same six pools, and the
+workers fetching those short items are most of the waiting
+(`worker_thread`).  Round 109 named xprtiod's pool lock; on build 541
+with rpciod per-CPU it is nfsiod's release that fills it.
+
+### What could remove it (not started)
+
+1. **A/B of the client's scope at `cpu` (or `smt`) against cache_shard**,
+   no build: `CLI_SCOPE` sets `default_affinity_scope`, which nfsiod and
+   xprtiod take; at `cpu`, one pool a CPU, each lock taken by one CPU's
+   queuers and workers.  Round 109 tried numa and cache_shard only.
+2. **nfsiod per-CPU** (`WQ_PERCPU`), as build 541 made rpciod: the
+   release queued on the CPU that ran the task, on that CPU's own pool.
+3. **Release a READ's task inline on rpciod**, saving the item and the
+   pool round trip altogether; `rpc_release` runs on nfsiod so that it
+   may sleep, so this needs care for the procedures where it does.
