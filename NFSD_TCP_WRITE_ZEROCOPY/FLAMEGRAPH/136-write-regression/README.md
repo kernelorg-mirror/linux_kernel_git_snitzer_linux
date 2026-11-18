@@ -47,3 +47,36 @@ memory controllers (round 107's shape), `ss -tni` on both hosts' ports
 and the client's per-transport RPC queues three times in the load, and
 nstat deltas on both.  The same script runs on build 469 after the
 reboot.
+
+### t2-r1077: build 541's client, the tip's server (17:51 to 17:54)
+
+PASS, 74.79 GB/s (37.14 / 37.65), no drive stepped down, no new kernel
+warning; fio's completion 57 ms mean, 156 ms p99.  Raw perf data:
+`/dev/shm/zc-p136-1077.data` (server), `/dev/shm/zc-cli136-1077.data`
+(client).
+
+- **CPU** (mpstat, seconds 4 to 9, iowait as idle): client 43% / 42%
+  (node 0 / node 1), server 25% (work CPUs 8-55 27%).  Neither host is
+  CPU-bound.
+- **Client memory**: 158.9 GB/s in the 5 s, 2.13 bytes a byte written
+  (round 107 on build 469: 2.17).
+- **Client profile**: `cpu_idle_poll` 56.6% (idle=poll); fio 15.7% of
+  samples, `get_io_u` alone 7.25% (fio's own); then
+  `__list_del_entry_valid_or_report` 3.23%, `nfs_page_create` 1.48%,
+  `nfs_scan_commit_list` 1.35%, `nfs_clear_request` 1.14%,
+  `try_grab_folio_fast` 1.10%, spin lock 1.0 + slowpath 0.83%,
+  `mutex_spin_on_owner` 0.82%.  rpciod and xprtiod workers each under
+  0.5%.
+- **Server profile**: idle 51%, nfsd 47%; softirq 5.6%, the ring's
+  receive (`xeu_rx_poll` 1.9%), the loan's table 0.8%.
+- **Sockets** (`ss -tni`, seconds 6, 9, 12): the client's 32 sockets
+  hold 50 to 53 MB unsent (1.6 MB each), cwnd 41 to 47 segments of 7792
+  bytes (about 350 KB); the server's hold nothing unsent and 4.5 to 5.2
+  MB unread.  Client bytes retransmitted from second 6 to 12: 1.19 MB.
+  The server's rings dropped 85 and 68 frames in the 10 s window.
+- **The client's RPC queues** (`xprt_info`): 32 TCP transports, 16 a
+  port; 4,042 to 4,398 RPCs waiting to send (up to 315 on one
+  transport), 147 to 161 sent and waiting for a reply, none in the
+  backlog: about 5 in flight a transport, 130 queued behind them.
+- nstat: this run's files have the counters since boot (`nstat -a`, a
+  mistake); `prof-write.sh` now writes the deltas since second 4.

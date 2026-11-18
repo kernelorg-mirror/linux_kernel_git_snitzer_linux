@@ -44,7 +44,7 @@ snap() {	# snap <tag>
 	row 12 && snap 12
 	wait
 	row 14
-	nstat -a > $O/nstat-srv.txt 2>&1; $SSHC "nstat -a" > $O/nstat-cli.txt 2>&1
+	nstat > $O/nstat-srv.txt 2>&1; $SSHC "nstat" > $O/nstat-cli.txt 2>&1	# deltas since second 4
 ) &
 ./write-check.sh $n > $O/write-check.out 2>&1; rc=$?
 wait
