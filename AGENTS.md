@@ -344,6 +344,37 @@ beside those rows: the frame is in
 `FLAMEGRAPH/106-pending-base/README.md`, "The frame".  A rate alone is
 not a result.
 
+## Never find a process by a pattern your own command contains (hard rule)
+
+**Mike, 18 November: agents keep making this mistake, in every
+session.**  A wait or kill loop that looks for a run with `pgrep -f`,
+`pkill -f` or `ps | grep` on a string that is also in the loop's own
+command line matches itself: the loop's shell (`bash -c "... nfs4k.sh
+982 ..."`) carries the pattern, so `while pgrep -f 'nfs4k.sh 982'` never
+ends and the next step never starts, and `pkill -f` kills the wrong
+process or the agent's own shell.  On 18 November this held up a queued
+A/B twice (round 114), each time reported as the run hanging.  Also:
+`grep -v pgrep` to tidy the output hides the loop, because its text
+contains "pgrep".
+
+What to do instead, in this order:
+
+- **Wait on the PID you started**, not on a name: `cmd & pid=$!; wait
+  $pid` (or `while kill -0 $pid 2>/dev/null; do sleep 5; done` from
+  another shell), or chain the steps in one command (`a; b`), so the
+  next starts when the last one ends.
+- **Wait on a marker the run writes**: a line in its log (`until grep
+  -q 'sequence done' $L; do sleep 10; done`), a file it creates, or its
+  `step.sh` "done" line.  The rig's scripts all write one.
+- **If a process must be found by its command**, check
+  `/proc/<pid>/cmdline` and skip `$$`, your own shell and anything whose
+  command line is your search (a `pgrep` or a loop of yours), and print
+  what matched before killing it.  Never `pkill -f` a pattern you typed
+  in the same command.
+- **Before telling Mike a run is hung, look at the run itself**: its
+  log's last line, `step.sh`'s "done" line in `dmesg`, `ss` for
+  connections.  A loop of yours that has not moved on is not a hung run.
+
 ## NFSD TCP write-path zero-copy (page-loan series)
 
 The server-side page-loan work — eliminating the redundant receive-side data
