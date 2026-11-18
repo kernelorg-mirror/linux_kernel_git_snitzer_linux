@@ -943,6 +943,350 @@ static struct group_info *unix_gid_find(kuid_t uid, struct svc_rqst *rqstp)
 	}
 }
 
+/*
+ * Per-rqst auth borrow.
+ *
+ * Every AUTH_SYS or AUTH_NULL call otherwise looks up its ip_map (from
+ * the transport's one-entry cache, which concurrent calls on a
+ * connection miss, or from the hash), takes a reference on the
+ * auth_domain it names and later drops it, and looks up its uid's
+ * unix_gid and takes and drops a reference on its group_info.  Every
+ * client of one domain shares that domain's refcount, and every call
+ * from one uid that group_info's, so each call writes cache lines that
+ * every CPU writes.  Instead each svc_rqst keeps a few ip_maps and a few
+ * unix_gids, with its own reference on each, and a call whose key
+ * matches a fresh entry is given that entry's domain and group_info
+ * without taking a reference; rq_client_lent and rq_gi_lent tell the
+ * release that the references are the cache's.
+ *
+ * An svc_rqst serves one call at a time and the cache is only its own,
+ * so it takes no lock.  Freshness, checked on every hit: CACHE_VALID
+ * set, CACHE_CLEANED clear (set on every removal from the hash), not
+ * expired, last_refresh after the cache's flush_time, and not past half
+ * the refresh age, where cache_check() starts a refresh upcall; a
+ * negative ip_map is never kept, a negative unix_gid is (it means "the
+ * wire's groups").  So a flush or an update is seen on the next call,
+ * and an entry no longer fresh is looked up and checked exactly as
+ * before.  The entries are dropped when the rqst is freed, before its
+ * net's caches go away.  Only AUTH_SYS and AUTH_NULL borrow: gss calls
+ * this function for its fallback domain and releases with its own code.
+ */
+#define SVCAUTH_BORROW_IPM	4
+#define SVCAUTH_BORROW_UG	8
+
+struct svcauth_borrow_ipm {
+	u64			used;
+	time64_t		checked;	/* the second it was filled */
+	struct ip_map		*ipm;
+	struct cache_detail	*cd;
+	const char		*class;		/* compared only */
+};
+
+struct svcauth_borrow_ug {
+	u64			used;
+	time64_t		checked;	/* the second it was filled */
+	struct unix_gid		*ug;
+	struct cache_detail	*cd;
+};
+
+struct svcauth_unix_borrow {
+	u64				clock;
+	unsigned int			ipm_mru;
+	unsigned int			ug_mru;
+	struct svcauth_borrow_ipm	ipm[SVCAUTH_BORROW_IPM];
+	struct svcauth_borrow_ug	ug[SVCAUTH_BORROW_UG];
+};
+
+struct svcauth_borrow_counts {
+	unsigned long	ipm_hit;
+	unsigned long	ipm_fill;
+	unsigned long	ug_hit;
+	unsigned long	ug_fill;
+};
+
+static DEFINE_PER_CPU(struct svcauth_borrow_counts, svcauth_borrow_pcpu);
+
+static bool svcauth_borrow = true;
+module_param(svcauth_borrow, bool, 0644);
+MODULE_PARM_DESC(svcauth_borrow,
+		 "Cache AUTH_SYS ip_maps and gids in each svc_rqst (read on every call)");
+
+static int svcauth_borrow_stats_get(char *buf, const struct kernel_param *kp)
+{
+	struct svcauth_borrow_counts c = { };
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		const struct svcauth_borrow_counts *p =
+			per_cpu_ptr(&svcauth_borrow_pcpu, cpu);
+
+		c.ipm_hit += READ_ONCE(p->ipm_hit);
+		c.ipm_fill += READ_ONCE(p->ipm_fill);
+		c.ug_hit += READ_ONCE(p->ug_hit);
+		c.ug_fill += READ_ONCE(p->ug_fill);
+	}
+	return sysfs_emit(buf, "ipm_hit %lu ipm_fill %lu ug_hit %lu ug_fill %lu\n",
+			  c.ipm_hit, c.ipm_fill, c.ug_hit, c.ug_fill);
+}
+
+static const struct kernel_param_ops svcauth_borrow_stats_ops = {
+	.get	= svcauth_borrow_stats_get,
+};
+module_param_cb(svcauth_borrow_stats, &svcauth_borrow_stats_ops, NULL, 0444);
+MODULE_PARM_DESC(svcauth_borrow_stats, "The svcauth borrow's hits and fills");
+
+/* One read of each field, so the decision is internally consistent. */
+static bool svcauth_borrow_fresh(const struct cache_detail *cd,
+				 const struct cache_head *h, time64_t now,
+				 time64_t checked)
+{
+	unsigned long flags = READ_ONCE(h->flags);
+	time64_t expiry = READ_ONCE(h->expiry_time);
+	time64_t refreshed = READ_ONCE(h->last_refresh);
+
+	if (!(flags & BIT(CACHE_VALID)) || (flags & BIT(CACHE_CLEANED)))
+		return false;
+	/* an entry sunrpc_cache_update() replaced has expiry_time 0 */
+	if (expiry <= now || READ_ONCE(cd->flush_time) >= refreshed)
+		return false;
+	/*
+	 * cache_check() starts a refresh upcall past half the refresh age;
+	 * once one is pending it returns the entry as it stands until the
+	 * entry expires, so a borrow may too.  When no one listens for the
+	 * upcall (a unix_gid when mountd does not manage gids) none is ever
+	 * pending, and the entry would miss on every call of its second
+	 * half: let one call a second through to the lookup's cache_check()
+	 * (@checked is the second the rqst's cache last did), and lend the
+	 * entry to the others.
+	 */
+	return now - refreshed <= (expiry - refreshed) / 2 ||
+	       (flags & BIT(CACHE_PENDING)) || checked == now;
+}
+
+/* The rqst's cache, made on its first eligible call; NULL to not borrow. */
+static struct svcauth_unix_borrow *svcauth_borrow_get(struct svc_rqst *rqstp)
+{
+	u32 flavour = rqstp->rq_authop->flavour;
+
+	if (!READ_ONCE(svcauth_borrow) ||
+	    (flavour != RPC_AUTH_UNIX && flavour != RPC_AUTH_NULL))
+		return NULL;
+	if (unlikely(!rqstp->rq_auth_borrow))
+		rqstp->rq_auth_borrow = kzalloc(sizeof(*rqstp->rq_auth_borrow),
+						GFP_NOWAIT | __GFP_NOWARN);
+	return rqstp->rq_auth_borrow;
+}
+
+static __always_inline bool
+svcauth_borrow_ipm_match(const struct svcauth_borrow_ipm *e,
+			 const struct cache_detail *cd, const char *class,
+			 const struct in6_addr *addr)
+{
+	return e->ipm && ipv6_addr_equal(&e->ipm->m_addr, addr) &&
+	       e->class == class && e->cd == cd;
+}
+
+/* A fresh ip_map for (@cd, @class, @addr), the entry used last first. */
+static struct ip_map *
+svcauth_borrow_ipm_find(struct svcauth_unix_borrow *b,
+			const struct cache_detail *cd, const char *class,
+			const struct in6_addr *addr, time64_t now)
+{
+	struct svcauth_borrow_ipm *e = &b->ipm[b->ipm_mru];
+	unsigned int i;
+
+	if (!svcauth_borrow_ipm_match(e, cd, class, addr)) {
+		for (i = 0; i < SVCAUTH_BORROW_IPM; i++) {
+			e = &b->ipm[i];
+			if (i != b->ipm_mru &&
+			    svcauth_borrow_ipm_match(e, cd, class, addr))
+				break;
+		}
+		if (i == SVCAUTH_BORROW_IPM)
+			return NULL;
+		b->ipm_mru = i;
+	}
+	if (!svcauth_borrow_fresh(e->cd, &e->ipm->h, now, e->checked) ||
+	    test_bit(CACHE_NEGATIVE, &e->ipm->h.flags))
+		return NULL;
+	e->used = ++b->clock;
+	return e->ipm;
+}
+
+/*
+ * Keep @ipm, with the reference the caller's lookup took, in place of
+ * the entry with the same key, else an empty one, else the least
+ * recently used.  The entry dropped is put; that never sleeps.
+ */
+static void svcauth_borrow_ipm_fill(struct svcauth_unix_borrow *b,
+				    struct cache_detail *cd, const char *class,
+				    struct ip_map *ipm)
+{
+	struct svcauth_borrow_ipm *e, *victim = NULL;
+	unsigned int i;
+
+	for (i = 0; i < SVCAUTH_BORROW_IPM; i++) {
+		e = &b->ipm[i];
+		if (svcauth_borrow_ipm_match(e, cd, class, &ipm->m_addr)) {
+			victim = e;
+			break;
+		}
+		if (!victim || (victim->ipm &&
+				(!e->ipm || e->used < victim->used)))
+			victim = e;
+	}
+	if (victim->ipm)
+		cache_put(&victim->ipm->h, victim->cd);
+	victim->ipm = ipm;
+	victim->cd = cd;
+	victim->class = class;
+	victim->used = ++b->clock;
+	victim->checked = seconds_since_boot();
+	b->ipm_mru = victim - b->ipm;
+	this_cpu_inc(svcauth_borrow_pcpu.ipm_fill);
+}
+
+static __always_inline bool
+svcauth_borrow_ug_match(const struct svcauth_borrow_ug *e,
+			const struct cache_detail *cd, kuid_t uid)
+{
+	return e->ug && uid_eq(e->ug->uid, uid) && e->cd == cd;
+}
+
+/* A fresh unix_gid for @uid, positive or negative, the last used first. */
+static struct unix_gid *
+svcauth_borrow_ug_find(struct svcauth_unix_borrow *b,
+		       const struct cache_detail *cd, kuid_t uid, time64_t now)
+{
+	struct svcauth_borrow_ug *e = &b->ug[b->ug_mru];
+	unsigned int i;
+
+	if (!svcauth_borrow_ug_match(e, cd, uid)) {
+		for (i = 0; i < SVCAUTH_BORROW_UG; i++) {
+			e = &b->ug[i];
+			if (i != b->ug_mru && svcauth_borrow_ug_match(e, cd, uid))
+				break;
+		}
+		if (i == SVCAUTH_BORROW_UG)
+			return NULL;
+		b->ug_mru = i;
+	}
+	if (!svcauth_borrow_fresh(e->cd, &e->ug->h, now, e->checked))
+		return NULL;
+	e->used = ++b->clock;
+	return e->ug;
+}
+
+/* As svcauth_borrow_ipm_fill(), for a unix_gid. */
+static void svcauth_borrow_ug_fill(struct svcauth_unix_borrow *b,
+				   struct cache_detail *cd, struct unix_gid *ug)
+{
+	struct svcauth_borrow_ug *e, *victim = NULL;
+	unsigned int i;
+
+	for (i = 0; i < SVCAUTH_BORROW_UG; i++) {
+		e = &b->ug[i];
+		if (svcauth_borrow_ug_match(e, cd, ug->uid)) {
+			victim = e;
+			break;
+		}
+		if (!victim || (victim->ug &&
+				(!e->ug || e->used < victim->used)))
+			victim = e;
+	}
+	if (victim->ug)
+		cache_put(&victim->ug->h, victim->cd);
+	victim->ug = ug;
+	victim->cd = cd;
+	victim->used = ++b->clock;
+	victim->checked = seconds_since_boot();
+	b->ug_mru = victim - b->ug;
+	this_cpu_inc(svcauth_borrow_pcpu.ug_fill);
+}
+
+/**
+ * svcauth_unix_borrow_free - drop an svc_rqst's cached ip_maps and gids
+ * @rqstp: the rqst, serving no call
+ *
+ * Called as the rqst is freed: a thread's at its exit, an rtc pool's as
+ * the pool goes, either before the service's net and its caches go.
+ */
+void svcauth_unix_borrow_free(struct svc_rqst *rqstp)
+{
+	struct svcauth_unix_borrow *b = rqstp->rq_auth_borrow;
+	unsigned int i;
+
+	if (!b)
+		return;
+	for (i = 0; i < SVCAUTH_BORROW_IPM; i++)
+		if (b->ipm[i].ipm)
+			cache_put(&b->ipm[i].ipm->h, b->ipm[i].cd);
+	for (i = 0; i < SVCAUTH_BORROW_UG; i++)
+		if (b->ug[i].ug)
+			cache_put(&b->ug[i].ug->h, b->ug[i].cd);
+	kfree(b);
+	rqstp->rq_auth_borrow = NULL;
+}
+
+/* Drop the call's domain and group_info unless the rqst's cache lent them. */
+static void svcauth_unix_put_client(struct svc_rqst *rqstp)
+{
+	if (rqstp->rq_client && !rqstp->rq_client_lent)
+		auth_domain_put(rqstp->rq_client);
+	rqstp->rq_client = NULL;
+	rqstp->rq_client_lent = false;
+	if (rqstp->rq_cred.cr_group_info && !rqstp->rq_gi_lent)
+		put_group_info(rqstp->rq_cred.cr_group_info);
+	rqstp->rq_cred.cr_group_info = NULL;
+	rqstp->rq_gi_lent = false;
+}
+
+/*
+ * The uid's groups through the rqst's cache: a hit installs them lent; a
+ * miss looks the unix_gid up and checks it as unix_gid_find() does and
+ * keeps it, positive or negative.  Returns what svcauth_unix_set_client()
+ * returns for the gid step, SVC_OK to go on.
+ */
+static enum svc_auth_status
+svcauth_borrow_gid(struct svc_rqst *rqstp, struct svcauth_unix_borrow *b,
+		   struct sunrpc_net *sn, time64_t now)
+{
+	struct svc_cred *cred = &rqstp->rq_cred;
+	struct cache_detail *cd = sn->unix_gid_cache;
+	struct unix_gid *ug;
+
+	ug = svcauth_borrow_ug_find(b, cd, cred->cr_uid, now);
+	if (ug) {
+		this_cpu_inc(svcauth_borrow_pcpu.ug_hit);
+	} else {
+		ug = unix_gid_lookup(cd, cred->cr_uid);
+		if (!ug)
+			return SVC_DROP;
+		/* cache_check() drops a reference on every result but 0 */
+		cache_get(&ug->h);
+		switch (cache_check(cd, &ug->h, &rqstp->rq_chandle)) {
+		case 0:
+			cache_put(&ug->h, cd);
+			break;
+		case -ENOENT:
+			break;
+		case -ETIMEDOUT:
+			cache_put(&ug->h, cd);
+			return SVC_CLOSE;
+		default:
+			cache_put(&ug->h, cd);
+			return SVC_DROP;
+		}
+		svcauth_borrow_ug_fill(b, cd, ug);
+	}
+	if (test_bit(CACHE_NEGATIVE, &ug->h.flags))
+		return SVC_OK;		/* the wire's groups stand */
+	put_group_info(cred->cr_group_info);
+	cred->cr_group_info = ug->gi;
+	rqstp->rq_gi_lent = true;
+	return SVC_OK;
+}
+
 enum svc_auth_status
 svcauth_unix_set_client(struct svc_rqst *rqstp)
 {
@@ -954,6 +1298,9 @@ svcauth_unix_set_client(struct svc_rqst *rqstp)
 	struct svc_xprt *xprt = rqstp->rq_xprt;
 	struct net *net = xprt->xpt_net;
 	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
+	char *class = rqstp->rq_server->sv_programs->pg_class;
+	struct svcauth_unix_borrow *b;
+	time64_t now = 0;
 
 	switch (rqstp->rq_addr.ss_family) {
 	case AF_INET:
@@ -969,15 +1316,30 @@ svcauth_unix_set_client(struct svc_rqst *rqstp)
 	}
 
 	rqstp->rq_client = NULL;
+	rqstp->rq_client_lent = false;
 	if (rqstp->rq_proc == 0)
 		goto out;
 
 	rqstp->rq_auth_stat = rpc_autherr_badcred;
-	ipm = ip_map_cached_get(xprt);
-	if (ipm == NULL)
-		ipm = __ip_map_lookup(sn->ip_map_cache,
-				      rqstp->rq_server->sv_programs->pg_class,
-				    &sin6->sin6_addr);
+	b = svcauth_borrow_get(rqstp);
+	if (b) {
+		now = seconds_since_boot();
+		ipm = svcauth_borrow_ipm_find(b, sn->ip_map_cache, class,
+					      &sin6->sin6_addr, now);
+		if (ipm) {
+			this_cpu_inc(svcauth_borrow_pcpu.ipm_hit);
+			rqstp->rq_client = &ipm->m_client->h;
+			rqstp->rq_client_lent = true;
+			goto gid;
+		}
+		ipm = __ip_map_lookup(sn->ip_map_cache, class,
+				      &sin6->sin6_addr);
+	} else {
+		ipm = ip_map_cached_get(xprt);
+		if (ipm == NULL)
+			ipm = __ip_map_lookup(sn->ip_map_cache, class,
+					      &sin6->sin6_addr);
+	}
 
 	if (ipm == NULL)
 		return SVC_DENIED;
@@ -993,11 +1355,26 @@ svcauth_unix_set_client(struct svc_rqst *rqstp)
 			return SVC_DENIED;
 		case 0:
 			rqstp->rq_client = &ipm->m_client->h;
-			kref_get(&rqstp->rq_client->ref);
-			ip_map_cached_put(xprt, ipm);
+			if (b) {
+				/* the lookup's reference becomes the cache's */
+				svcauth_borrow_ipm_fill(b, sn->ip_map_cache,
+							class, ipm);
+				rqstp->rq_client_lent = true;
+			} else {
+				kref_get(&rqstp->rq_client->ref);
+				ip_map_cached_put(xprt, ipm);
+			}
 			break;
 	}
 
+gid:
+	if (b) {
+		enum svc_auth_status stat = svcauth_borrow_gid(rqstp, b, sn, now);
+
+		if (stat != SVC_OK)
+			return stat;
+		goto out;
+	}
 	gi = unix_gid_find(cred->cr_uid, rqstp);
 	switch (PTR_ERR(gi)) {
 	case -EAGAIN:
@@ -1056,6 +1433,7 @@ svcauth_null_accept(struct svc_rqst *rqstp)
 	/* Signal that mapping to nobody uid/gid is required */
 	cred->cr_uid = INVALID_UID;
 	cred->cr_gid = INVALID_GID;
+	rqstp->rq_gi_lent = false;
 	cred->cr_group_info = groups_alloc(0);
 	if (cred->cr_group_info == NULL)
 		return SVC_CLOSE; /* kmalloc failure - client must retry */
@@ -1073,13 +1451,7 @@ svcauth_null_accept(struct svc_rqst *rqstp)
 static int
 svcauth_null_release(struct svc_rqst *rqstp)
 {
-	if (rqstp->rq_client)
-		auth_domain_put(rqstp->rq_client);
-	rqstp->rq_client = NULL;
-	if (rqstp->rq_cred.cr_group_info)
-		put_group_info(rqstp->rq_cred.cr_group_info);
-	rqstp->rq_cred.cr_group_info = NULL;
-
+	svcauth_unix_put_client(rqstp);
 	return 0; /* don't drop */
 }
 
@@ -1147,6 +1519,7 @@ svcauth_tls_accept(struct svc_rqst *rqstp)
 	/* Signal that mapping to nobody uid/gid is required */
 	cred->cr_uid = INVALID_UID;
 	cred->cr_gid = INVALID_GID;
+	rqstp->rq_gi_lent = false;
 	cred->cr_group_info = groups_alloc(0);
 	if (cred->cr_group_info == NULL)
 		return SVC_CLOSE;
@@ -1244,6 +1617,7 @@ svcauth_unix_accept(struct svc_rqst *rqstp)
 	p = xdr_inline_decode(xdr, XDR_UNIT * len);
 	if (!p)
 		return SVC_GARBAGE;
+	rqstp->rq_gi_lent = false;
 	cred->cr_group_info = groups_alloc(len);
 	if (cred->cr_group_info == NULL)
 		return SVC_CLOSE;
@@ -1280,13 +1654,7 @@ svcauth_unix_release(struct svc_rqst *rqstp)
 {
 	/* Verifier (such as it is) is already in place.
 	 */
-	if (rqstp->rq_client)
-		auth_domain_put(rqstp->rq_client);
-	rqstp->rq_client = NULL;
-	if (rqstp->rq_cred.cr_group_info)
-		put_group_info(rqstp->rq_cred.cr_group_info);
-	rqstp->rq_cred.cr_group_info = NULL;
-
+	svcauth_unix_put_client(rqstp);
 	return 0;
 }
 

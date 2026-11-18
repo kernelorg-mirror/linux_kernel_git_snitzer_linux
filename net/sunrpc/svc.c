@@ -1077,6 +1077,7 @@ svc_rqst_free(struct svc_rqst *rqstp)
 	if (rqstp->rq_scratch_folio)
 		folio_put(rqstp->rq_scratch_folio);
 	kfree(rqstp->rq_auth_data);
+	svcauth_unix_borrow_free(rqstp);
 	call_rcu(&rqstp->rq_rcu_head, svc_rqst_free_rcu);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rqst_free);
