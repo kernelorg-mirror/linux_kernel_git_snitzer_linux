@@ -34,3 +34,39 @@ sunrpc srcversion, runs `settled-iops.sh` with `nfs4k.sh`, and prints
 IOPS, CPU a READ on both hosts and the client's `/proc/net/rpc/nfs`
 (the per-CPU sums at work).  The server stays on round 129's stack at
 the settled setting.  `cswap131.sh stock` at the end.
+
+## Result, first four runs (18 November, 15:55 to 16:09)
+
+| Run | Client's stack | M IOPS (ports) | p99 a; b (ms) | Server busy, us a READ | Client busy (busiest) | Client us a READ | Client CPUs min / median / max |
+|---|---|---|---|---|---|---|---|
+| t2-r1058 | B | 3.10 (1.59 / 1.51) | 2.41; 2.61 | 76%, 15.69 | 77% (88%) | 11.92 | 66 / 76 / 89 |
+| t2-r1059 | P | 3.08 (1.55 / 1.54) | 2.47; 2.54 | 77%, 16.00 | 76% (82%) | 11.84 | 66 / 76 / 82 |
+| t2-r1060 | B | 3.03 (1.40 / 1.63) | 2.47; 2.44 | 75%, 15.84 | 76% (88%) | 12.04 | 66 / 76 / 88 |
+| t2-r1061 | P | 3.06 (1.55 / 1.52) | 2.41; 2.51 | 76%, 15.90 | 77% (85%) | 12.08 | 69 / 76 / 85 |
+
+B: 3.065 M at 11.98 us of the client's CPU a READ; P: 3.07 M at 11.96.
+Per-CPU `rpccnt` and version counts alone save nothing.  The reason,
+read from the client's `/proc/net/rpc/nfs` after each run: its `rpc`
+line's third count, `rpcauthrefresh`, is raised for every call as well
+(`call_reserveresult()` sends every call through `call_refresh()`), by
+a plain increment on the rpc_stat's same line, so P still passed that
+line between the client's CPUs on every call (round 131's switch left
+it too).
+
+**The shared counts undercount.**  Under B, `rpc` counted 66.5 and 66.0
+million calls where its own `proc3` counts summed to about 81 million
+(18% lost); under P the two agree to the call (80,986,894 against
+80,986,844 in t2-r1059: the 50 more are NFSACL calls, counted in NFS's
+rpccnt).  `rpcauthrefresh` lost as much under both (66 to 68 million).
+
+Mike: "make rpcauthrefresh per-CPU in the same commit".  Folded into
+the SUNRPC commit, `6a8bd94c11924`, whose message now leads with the
+undercount (Mike: "point out in the commit header ... that these stats
+undercount due to increments colliding"); the tips before are kept as
+`kernel-7.3/canary.pre-fold-authrefresh`.  Built at W=1 with no
+warning.
+
+Then (Mike: "please just do a single 1062:P, I need us to move onto the
+next ... have 1063 be a quick run P and iodepth of 96"): P rebuilt on
+the client from the tip, `ab-pcpu.sh 1062:P 1063:P:96`, set beside
+B's two runs above and round 130's iodepth 96 run (t2-r1053, 3.36 M).
