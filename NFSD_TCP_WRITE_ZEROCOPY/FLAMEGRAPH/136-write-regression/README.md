@@ -267,3 +267,18 @@ cleared, and the whole 3 GB/s is in what sunrpc and nfs changed
 between build 469 and the tip.  The per-CPU transport choice and rpciod
 per-CPU, each taken out alone above, are not it; another commit, or
 several together, is.  The client is back on build 541's stack.
+
+## Bisect, step 1: the tip's base with the two client patches (plan)
+
+Mike: "yes, go ahead with step 1 but do apply the 2 patches/client/
+commits that were needed for scaling".  On the branch those two are
+the first client commits of all, `8c2abe4089def` (WQ_SYSFS) and
+`1b9af79d9f16f` (the splice), and every canary client commit (David
+and Jonathan Flynn's eleven in `WRITE.md`) comes after them: the tree
+of `1b9af79d9f16f` is the tip's own base with the two patches and no
+other client change.  Its `net/sunrpc`, `fs/nfs_common`, `fs/lockd`,
+`fs/nfs` and their headers, built with `cbuild136.sh` into
+`/root/zc-ckern/S1`, loaded on build 541's kernel; two profiled WRITE
+passes, rpciod unbound there (held with `EXP_CLI_WQ`).  About 77.7: the
+regression is in the commits after it; about 74.9: it came with the
+base.
