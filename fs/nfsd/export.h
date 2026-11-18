@@ -218,6 +218,8 @@ struct svc_export *svc_export_update(struct svc_export *new,
 				     struct svc_export *old);
 void export_stats_init(struct nfsd_net *nn);
 void export_stats_shutdown(struct nfsd_net *nn);
+bool nfsd_fh_slots_sweep(time64_t now, unsigned int ttl);
+unsigned int nfsd_fh_borrow_kunit_ttl(unsigned int ttl);
 #endif
 
 #endif /* NFSD_EXPORT_H */
