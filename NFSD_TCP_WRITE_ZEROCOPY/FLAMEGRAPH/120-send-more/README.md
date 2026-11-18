@@ -43,3 +43,9 @@ the passes at N show the change costs nothing off, this one what it does
 to 1 MiB READs, whose replies the FIFO also sends.  Segments out a
 reply (TcpOutSegs over the replies sent) is the batching's own measure:
 about 1 now.
+
+## The WRITE pass
+
+t2-r1007 (send_more N): **RERUN, 74.53 GB/s** (no drive stepped down, no
+new kernel warning), as round 111's t2-r945 at 74.52.  Rerun as t2-r1017
+after t2-r1016.
