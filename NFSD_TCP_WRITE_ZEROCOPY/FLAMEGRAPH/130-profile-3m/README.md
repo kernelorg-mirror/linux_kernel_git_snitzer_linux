@@ -72,3 +72,9 @@ would carry 4.0 M at 100%, the client at 12.08 on 48 about the same.
 With 3,072 READs in flight (iodepth 64, 48 jobs) at 1.00 ms mean,
 Little's Law gives the 3.07 M measured: the rate is the latency's, and
 the latency is the queueing on the busiest CPUs of both hosts.
+
+## iodepth 96 (Mike: "run iodepth 96 quickly")
+
+One `settled-iops.sh` run of `nfs4k.sh 1053:96` (4,608 READs in
+flight): if the rate is the latency's, IOPS rise; if the busiest CPUs
+bound it, only the latency does.
