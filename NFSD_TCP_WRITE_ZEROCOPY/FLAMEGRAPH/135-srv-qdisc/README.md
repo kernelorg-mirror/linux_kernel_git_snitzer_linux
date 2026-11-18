@@ -43,3 +43,10 @@ run going (the build writes about 400 MB to the root disk):
 `STACK=/var/tmp/svcstack-541-tip/stack SUNRPC_KO=none
 ./step.sh ... swap-sunrpc.sh`, then `settled.sh apply`, the sunrpc
 srcversion and the switch's absence checked.
+
+Done at 17:24: built from `6735e8c25f3a8` (8 modules, no warning but
+the compiler notes; sunrpc `C4A23C35035DD3A1E1C967B`, the client's P
+build's source, without the partial wait's switch; nfsd
+`78F201D2B9A190D3A538FA9`), swapped with no client mounted, the host at
+the settled setting, kdump armed.  `svcstack-541-partial` stays in
+/var/tmp for a swap back.
