@@ -284,17 +284,20 @@ says why WRITEs cannot reach it.
   drives (`WARM=3 RUNTIME=15`, a 30 s rest; it need only show that
   78 GB/s is still reached, and round 103's 40 s runs are at full rate
   from their second second, every 15 s of them within 0.2 GB/s of the
-  whole). It passes at **74.6 GB/s or more since 18 November**
-  (Mike: "just lower to 74.6, this is a known issue we need to get
-  back to later.. IOPS is what matters for now"; 75.0 from 17
-  November: "for now we must tolerate that WRITE has dropped down to
-  75 GB/s, we will hunt down the client regression after we get IOPS
-  performance up"; the client's build 541 writes 75.0 where build 469
-  wrote 77.8, and the mark goes back to 77.6 once that is fixed:
-  `WRITE.md`, TODO 2), no drive stepped down and no new kernel
-  warning; below 74.6 it is run once more (`RERUN`), and below 74.6
-  twice is a regression. **From 16 to 17 November it passed at 77.6.
-  Until 16 November
+  whole). It passes at **77.6 GB/s or more again since 18 November,
+  late (Mike: "yes, put the WRITE mark back to 77.6")**, no drive
+  stepped down and no new kernel warning; below 77.6 it is run once
+  more (`RERUN`), and below 77.6 twice is a regression.  FLAMEGRAPH
+  round 136 found the client's regression: build 541's client carries
+  `5555163d661a0`, the per-CPU transport choice for nconnect, which
+  writes 74.5 to 74.9; the tip reverts it (78.00, t2-r1118).  **So a
+  pass runs with the client on a stack built from the tip, not build
+  541's own** (`FLAMEGRAPH/136-write-regression/`: `cbuild136.sh`,
+  loaded with `cswap131.sh`), until a client kernel carries the
+  reverts.  The mark was 74.6 from 18 November (Mike: "just lower to
+  74.6, this is a known issue we need to get back to later.. IOPS is
+  what matters for now") and 75.0 from 17 November.  **From 16 to 17
+  November it passed at 77.6.  Until 16 November
   it passed at 78.0 and ran 77.8 to 77.99 again; Mike: "77.8 to 77.99
   aren't worth concern, anything before 77.6 should be flagged for
   re-run".** A drive that steps down or a new kernel warning still
@@ -306,7 +309,7 @@ says why WRITEs cannot reach it.
   beside its read results, and a round's report gives it. A round
   with no pass is not finished.
 
-## READs are locked at 71.5 GB/s (hard rule)
+## READs are locked at 77.6 GB/s (hard rule)
 
 **From 16 November READs are held too (Mike: "lock it at 256K for
 73GB/s").** Every change to a path READs take (the same list as
@@ -317,10 +320,14 @@ drives, fio reading 1 MiB at a time with the client's rsize at
 after a trim and 120 s of rest, **fio on io_uring with registered
 buffers since 17 November (Mike: "make io_uring with fixedbufs the
 READ pass's engine")**: 80.39 GB/s on it (t2-r867), passes before it
-on libaio.  The WRITE pass stays on libaio. It passes at **71.5 GB/s or more**
-with no new kernel warning; 71.0 to 71.49 is run once more (`RERUN`);
-below 71.0, or below 71.5 twice, is a regression, and is not kept
-unless Mike decides. **The mark was 73.0 until Mike relaxed it on 16
+on libaio.  The WRITE pass stays on libaio. It passes at **77.6 GB/s or
+more since 18 November, late (Mike: "raise the READ mark to the same"
+as the WRITE mark)** with no new kernel warning; 77.1 to 77.59 is run
+once more (`RERUN`); below 77.1, or below 77.6 twice, is a regression,
+and is not kept unless Mike decides.  FLAMEGRAPH round 136's passes
+read 79.27 to 82.24 (t2-r1113, r1116, r1121; t2-r1119's 77.84 was one
+port's drives), with the client on a stack from the tip as above.  The
+mark was 71.5 from 16 November, and **73.0 until Mike relaxed it on 16
 November for the spread from run to run ("relax it down to 71.5 until
 we're able to eek out more wins and get performance to be more
 reliable")**: build 534's own sunrpc read 69.82 to 73.47 at the

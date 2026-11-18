@@ -127,7 +127,15 @@ against it.  For WRITEs on tardis2:
    - then, if those do not, the commits above one at a time on a
      client module built without each (the splice first: its pages
      held until TCP sends them, and the per-CPU transport map second).
-2. **TODO: reset the WRITE pass's mark to 77.6 GB/s** once whatever
+2. **Done 18 November, late (Mike: "yes, put the WRITE mark back to
+   77.6, and raise the READ mark to the same").**  TODO 1's cause is
+   `5555163d661a0`, the per-CPU transport choice for nconnect
+   (FLAMEGRAPH round 136): reverted at the tip with the commits on it,
+   the client writes 78.00 (t2-r1118), and both passes' marks are 77.6
+   in `xeu-rig/write-check.sh`, `xeu-rig/read-check.sh` and AGENTS.md.
+   A pass runs with the client on a stack built from the tip until a
+   client kernel carries the reverts.  The TODO was: reset the WRITE
+   pass's mark to 77.6 GB/s once whatever
    holds back build 541's client is fixed (Mike, 17 November).  It is
    74.6 in `xeu-rig/write-check.sh` (the `g >= 74.6` test and its
    header) and in AGENTS.md's hard rule only for that client; when
