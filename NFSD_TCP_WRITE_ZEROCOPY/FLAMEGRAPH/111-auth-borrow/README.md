@@ -309,3 +309,8 @@ with `CONFIG_NFSD_EXPORT_BORROW_KUNIT_TEST=y` and
 /var/tmp/svcstack-541-kunit` loads it with `kunit` at `enable=1
 filter_glob=nfsd_export_borrow`, no service started, then puts the
 stack's own nfsd back as `kunit-auth.sh` does.
+
+The first try (02:12) ran nothing: the suite is named
+`sunrpc-nfsd-export-borrow`, and the filter named
+`nfsd_export_borrow`; the test nfsd loaded and unloaded cleanly, no
+KTAP, the stack back after it.  The filter and the results path fixed.
