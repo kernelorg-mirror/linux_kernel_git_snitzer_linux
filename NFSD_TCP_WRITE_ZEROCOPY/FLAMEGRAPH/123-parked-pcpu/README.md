@@ -31,6 +31,9 @@ in t2-r1027, about **0.5 us a READ saved** (1% is 0.226 us at 2.83 M).
 
 The rest of `percpu_counter_add_batch` (1.85% in all): nfsd's read
 bytes from `nfsd_finish_read` 0.68%, `svc_xprt_recv_call` 0.32%, the
-DRC's from `nfsd_cache_lookup` 0.23%.  A byte count of 4096 a READ is
-past the default batch, so each such add folds into the shared count
-under its spinlock: the next shared line to look at.
+DRC's from `nfsd_cache_lookup` 0.23%.  (First read here as byte counts
+past the batch folding under the spinlock: wrong.  nfsd's counters use
+`percpu_counter_add_local()`, whose batch is INT_MAX, and `perf
+annotate` puts the samples on the per-CPU add itself, the preempt count
+and the counters' per-CPU pointer, not on a lock: no shared line, about
+60 ns an add, six or seven adds a READ.)
