@@ -11,6 +11,7 @@
 #define _LINUX_SUNRPC_STATS_H
 
 #include <linux/proc_fs.h>
+#include <linux/percpu.h>
 
 struct rpc_stat {
 	const struct rpc_program *program;
@@ -24,6 +25,22 @@ struct rpc_stat {
 				rpcretrans,
 				rpcauthrefresh,
 				rpcgarbage;
+
+	/*
+	 * When rpc_stat_alloc_counts() has run, every call is counted per
+	 * CPU, so that the CPUs do not pass this struct's line and the
+	 * versions' counts between them: rpccnt and rpcauthrefresh in
+	 * pcpu, and each version of program in vs_count[version],
+	 * allocated at the first client of that version.  Read them with
+	 * rpc_stat_rpccnt() and rpc_stat_rpcauthrefresh().
+	 */
+	struct rpc_stat_pcpu __percpu	*pcpu;
+	unsigned int __percpu	**vs_count;
+};
+
+struct rpc_stat_pcpu {
+	unsigned int		rpccnt;
+	unsigned int		rpcauthrefresh;
 };
 
 struct svc_stat {
@@ -41,6 +58,11 @@ struct svc_stat {
 	/* Per-version per-procedure call counts (per-cpu, per-netns) */
 	unsigned long __percpu	**vs_count;
 };
+
+int			rpc_stat_alloc_counts(struct rpc_stat *statp);
+void			rpc_stat_free_counts(struct rpc_stat *statp);
+unsigned int		rpc_stat_rpccnt(const struct rpc_stat *statp);
+unsigned int		rpc_stat_rpcauthrefresh(const struct rpc_stat *statp);
 
 struct net;
 int			svc_stat_alloc_counts(struct svc_stat *statp);

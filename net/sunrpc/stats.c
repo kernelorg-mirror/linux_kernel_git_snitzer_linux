@@ -28,6 +28,7 @@
 #include <trace/events/sunrpc.h>
 
 #include "netns.h"
+#include "sunrpc.h"
 
 #define RPCDBG_FACILITY	RPCDBG_MISC
 
@@ -47,21 +48,122 @@ static int rpc_proc_show(struct seq_file *seq, void *v) {
 			statp->nettcpconn);
 	seq_printf(seq,
 		"rpc %u %u %u\n",
-			statp->rpccnt,
+			rpc_stat_rpccnt(statp),
 			statp->rpcretrans,
-			statp->rpcauthrefresh);
+			rpc_stat_rpcauthrefresh(statp));
 
 	for (i = 0; i < prog->nrvers; i++) {
 		const struct rpc_version *vers = prog->version[i];
+		unsigned int __percpu *count = NULL;
+
 		if (!vers)
 			continue;
+		if (statp->vs_count)
+			count = READ_ONCE(statp->vs_count[i]);
 		seq_printf(seq, "proc%u %u",
 					vers->number, vers->nrprocs);
-		for (j = 0; j < vers->nrprocs; j++)
-			seq_printf(seq, " %u", vers->counts[j]);
+		for (j = 0; j < vers->nrprocs; j++) {
+			unsigned int n = data_race(vers->counts[j]);
+			int cpu;
+
+			if (count)
+				for_each_possible_cpu(cpu)
+					n += *per_cpu_ptr(&count[j], cpu);
+			seq_printf(seq, " %u", n);
+		}
 		seq_putc(seq, '\n');
 	}
 	return 0;
+}
+
+/*
+ * rpc_stat_rpccnt() and rpc_stat_rpcauthrefresh() return what is counted
+ * in the plain field and, when it is counted per CPU, on every CPU.
+ */
+#define RPC_STAT_SUM(name)						\
+unsigned int rpc_stat_##name(const struct rpc_stat *statp)		\
+{									\
+	unsigned int n = data_race(statp->name);			\
+	int cpu;							\
+									\
+	if (statp->pcpu)						\
+		for_each_possible_cpu(cpu)				\
+			n += per_cpu_ptr(statp->pcpu, cpu)->name;	\
+	return n;							\
+}									\
+EXPORT_SYMBOL_GPL(rpc_stat_##name)
+
+RPC_STAT_SUM(rpccnt);
+RPC_STAT_SUM(rpcauthrefresh);
+
+/**
+ * rpc_stat_alloc_counts - count an rpc_stat's calls per CPU
+ * @statp: rpc_stat whose program is set
+ *
+ * The counts of each version are allocated when the first client of that
+ * version is created (rpc_stat_alloc_version()), as a program's versions
+ * may be registered after its rpc_stat is set up.  Call
+ * rpc_stat_free_counts() once no client counts in @statp.
+ *
+ * Returns zero on success, or a negative errno otherwise.
+ */
+int rpc_stat_alloc_counts(struct rpc_stat *statp)
+{
+	statp->vs_count = kcalloc(statp->program->nrvers,
+				  sizeof(unsigned int __percpu *), GFP_KERNEL);
+	if (!statp->vs_count)
+		return -ENOMEM;
+	statp->pcpu = alloc_percpu(struct rpc_stat_pcpu);
+	if (!statp->pcpu) {
+		kfree(statp->vs_count);
+		statp->vs_count = NULL;
+		return -ENOMEM;
+	}
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rpc_stat_alloc_counts);
+
+/**
+ * rpc_stat_free_counts - stop counting an rpc_stat's calls per CPU
+ * @statp: rpc_stat that rpc_stat_alloc_counts() set up
+ *
+ * The counts so far stay in rpccnt and rpcauthrefresh; those of each
+ * version are dropped with its per-CPU counts.
+ */
+void rpc_stat_free_counts(struct rpc_stat *statp)
+{
+	unsigned int i;
+
+	if (!statp->pcpu)
+		return;
+	statp->rpccnt = rpc_stat_rpccnt(statp);
+	statp->rpcauthrefresh = rpc_stat_rpcauthrefresh(statp);
+	free_percpu(statp->pcpu);
+	statp->pcpu = NULL;
+	for (i = 0; i < statp->program->nrvers; i++)
+		free_percpu(statp->vs_count[i]);
+	kfree(statp->vs_count);
+	statp->vs_count = NULL;
+}
+EXPORT_SYMBOL_GPL(rpc_stat_free_counts);
+
+/*
+ * Count the calls of a new client's version per CPU, if its rpc_stat
+ * counts per CPU and has not yet the counts of that version.  If the
+ * allocation fails, the version's calls are counted as they were.
+ */
+void rpc_stat_alloc_version(struct rpc_stat *statp,
+			    const struct rpc_program *program, u32 vers)
+{
+	unsigned int __percpu *count;
+
+	if (!statp || !statp->vs_count || statp->program != program ||
+	    vers >= program->nrvers || READ_ONCE(statp->vs_count[vers]))
+		return;
+	count = __alloc_percpu(program->version[vers]->nrprocs *
+			       sizeof(unsigned int), sizeof(unsigned int));
+	if (count && cmpxchg(&statp->vs_count[vers], NULL, count))
+		free_percpu(count);
 }
 
 static int rpc_proc_open(struct inode *inode, struct file *file)

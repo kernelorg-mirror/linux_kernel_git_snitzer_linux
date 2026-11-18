@@ -493,6 +493,7 @@ static struct rpc_clnt * rpc_new_client(const struct rpc_create_args *args,
 	clnt->cl_prog     = args->prognumber ? : program->number;
 	clnt->cl_vers     = version->number;
 	clnt->cl_stats    = args->stats ? : program->stats;
+	rpc_stat_alloc_version(clnt->cl_stats, program, clnt->cl_vers);
 	clnt->cl_metrics  = rpc_alloc_iostats(clnt);
 	rpc_init_pipe_dir_head(&clnt->cl_pipedir_objects);
 	err = -ENOMEM;
@@ -1906,7 +1907,9 @@ static void
 call_start(struct rpc_task *task)
 {
 	struct rpc_clnt	*clnt = task->tk_client;
+	struct rpc_stat *stats = clnt->cl_stats;
 	int idx = task->tk_msg.rpc_proc->p_statidx;
+	unsigned int __percpu *count = NULL;
 
 	trace_rpc_request(task);
 
@@ -1916,9 +1919,17 @@ call_start(struct rpc_task *task)
 	}
 
 	/* Increment call count (version might not be valid for ping) */
-	if (clnt->cl_program->version[clnt->cl_vers])
+	if (stats->pcpu) {
+		this_cpu_inc(stats->pcpu->rpccnt);
+		if (clnt->cl_program == stats->program)
+			count = READ_ONCE(stats->vs_count[clnt->cl_vers]);
+	} else {
+		stats->rpccnt++;
+	}
+	if (count)
+		this_cpu_inc(count[idx]);
+	else if (clnt->cl_program->version[clnt->cl_vers])
 		clnt->cl_program->version[clnt->cl_vers]->counts[idx]++;
-	clnt->cl_stats->rpccnt++;
 	task->tk_action = call_reserve;
 	rpc_task_set_transport(task, clnt);
 }
@@ -1990,9 +2001,15 @@ call_retry_reserve(struct rpc_task *task)
 static void
 call_refresh(struct rpc_task *task)
 {
+	struct rpc_stat *stats;
+
 	task->tk_action = call_refreshresult;
 	task->tk_status = 0;
-	task->tk_client->cl_stats->rpcauthrefresh++;
+	stats = task->tk_client->cl_stats;
+	if (stats->pcpu)
+		this_cpu_inc(stats->pcpu->rpcauthrefresh);
+	else
+		stats->rpcauthrefresh++;
 	rpcauth_refreshcred(task);
 }
 
