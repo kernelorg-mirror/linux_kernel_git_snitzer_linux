@@ -47,14 +47,18 @@
 #                             (t2-r918, r919: 2.01 to 2.02 M); Mike, 17
 #                             November: "that should be reflected in
 #                             settled-iops.sh settings!"
-#   CLI_SCOPE=cache_shard     the client's workqueue default_affinity_scope
-#                             for the run, build 541's own default, not
-#                             twoport.sh's numa (Mike, 17 November: "add
-#                             cache_shard to settled-iops.sh"): 2.39 M IOPS
-#                             in three runs against numa's 2.31 to 2.32,
-#                             the client 68% busy against 77%, the p99
-#                             0.8 ms longer (FLAMEGRAPH round 109, t2-r909
-#                             to r914).  The WRITE and READ passes keep numa.
+#   CLI_SCOPE=cpu             the client's workqueue default_affinity_scope
+#                             for the run, one unbound pool a CPU for
+#                             nfsiod and xprtiod (Mike, 18 November: "add
+#                             it to settled-iops.sh"): 2.54 to 2.55 M IOPS
+#                             against cache_shard's 2.52 to 2.54, the
+#                             client 3 points less busy in every pair, the
+#                             p99 0.1 to 0.3 ms longer (FLAMEGRAPH round
+#                             112, t2-r966 to r971: the pool lock nfsiod's
+#                             release of every READ fills).  cache_shard,
+#                             build 541's own default, from 17 November
+#                             (round 109: 2.39 M against numa's 2.31 to
+#                             2.32).  The WRITE and READ passes keep numa.
 #
 # What he prescribes that settled.sh already holds: max_block_size 1 MiB,
 # io_cache_read and io_cache_write 2 (direct), svc_tcp_rx_region_reads N,
@@ -90,7 +94,7 @@ apply|audit) exec ./settled.sh "$@" ;;
 run)
 	shift; [ $# -gt 0 ] || { echo "settled-iops.sh run <command ...>"; exit 1; }
 	export SRV_ALIAS=${SRV_ALIAS:-1} NCONN=${NCONN:-12} JOBS=${JOBS:-24} IODEPTH=${IODEPTH:-64}
-	export CLI_SCOPE=${CLI_SCOPE:-cache_shard}
+	export CLI_SCOPE=${CLI_SCOPE:-cpu}
 	export RW=${RW:-randread} BS=${BS:-4k} IOENGINE=${IOENGINE:-io_uring} FIXEDBUFS=${FIXEDBUFS-1}
 	"$@"; rc=$?
 	env -u EXP_NFSD_THREADS -u EXP_SYSCTL -u EXP_POOL_MODE -u EXP_SVCAUTH_BORROW \
