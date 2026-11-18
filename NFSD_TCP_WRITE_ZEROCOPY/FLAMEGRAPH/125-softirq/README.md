@@ -44,3 +44,16 @@ Under `settled-iops.sh`, `EXP_TCP_LOB` 4194304 (4 MiB, the setting off
 tardis2) against the settled 262144, two runs a side in turns (t2-r1030
 to r1033), each followed by a plain `settled.sh apply`; CPU a READ from
 the server's busy.
+
+### Result (18 November, 08:37 to 08:50)
+
+| Run | tcp_limit_output_bytes | M IOPS (ports) | p99 a; b (ms) | Busy (busiest) | us a READ |
+|---|---|---|---|---|---|
+| t2-r1030 | 4 MiB | 2.87 (1.45 / 1.42) | 3.16; 3.26 | 76% (94%) | 16.95 |
+| t2-r1031 | 256 KiB | 2.90 (1.54 / 1.37) | 2.77; 3.16 | 77% (100%) | 16.99 |
+| t2-r1032 | 4 MiB | 2.93 (1.51 / 1.41) | 2.80; 2.80 | 77% (100%) | 16.82 |
+| t2-r1033 | 256 KiB | 2.83 (1.46 / 1.37) | 3.06; 3.39 | 76% (100%) | 17.19 |
+
+4 MiB: 2.90 M and 16.89 us a READ on the mean, 256 KiB 2.865 M and 17.09:
+0.2 us (1.2%) the same way in both pairs, about the spread.  No new
+kernel warning.  Not held in `settled-iops.sh` until Mike says.
