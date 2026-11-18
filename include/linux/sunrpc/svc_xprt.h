@@ -292,6 +292,10 @@ struct svc_rtc_pool {
 	 */
 	struct percpu_counter	parked ____cacheline_aligned_in_smp;
 	unsigned int		hw;	/* parked high water this period */
+	/* svc_rtc_rebalance(): each CPU's busy ns at its last pass */
+	struct delayed_work	rebalance;
+	u64			*rb_busy;
+	u64			rb_when;	/* ktime_get_ns() then */
 };
 
 /* svc_rtc_pool.flags */
