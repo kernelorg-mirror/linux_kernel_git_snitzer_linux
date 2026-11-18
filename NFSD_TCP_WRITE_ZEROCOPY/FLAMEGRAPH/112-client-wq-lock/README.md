@@ -83,3 +83,15 @@ with rpciod per-CPU it is nfsiod's release that fills it.
 3. **Release a READ's task inline on rpciod**, saving the item and the
    pool round trip altogether; `rpc_release` runs on nfsiod so that it
    may sleep, so this needs care for the procedures where it does.
+
+## The A/B: the client's scope at cpu against cache_shard (plan)
+
+Mike, 18 November: "A/B option 1 and then maybe we'll do option 2 if
+option 1 goes well".  Writing `default_affinity_scope` reapplies it to
+every unbound workqueue already made, nfsiod and xprtiod among them: at
+`cpu` each has a pool a CPU.  Three runs a side in turns with round
+109's `ab-scope.sh` (it sets `CLI_SCOPE` for each run and checks the
+run's geometry line), at the IOPS setting, both borrows held:
+
+    cd xeu-rig; ./step.sh /var/tmp/zc-run-logs/r112 scope ./settled-iops.sh run \
+        ../FLAMEGRAPH/109-iops/ab-scope.sh 966:cpu 967:cache_shard 968:cpu 969:cache_shard 970:cpu 971:cache_shard
