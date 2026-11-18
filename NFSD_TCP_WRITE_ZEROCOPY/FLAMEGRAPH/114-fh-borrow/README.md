@@ -67,3 +67,15 @@ The 16-against-0 A/B was cut after t2-r976 (Mike: "stop after r976 and
 go straight to the 64 against 16 runs"), the off side's baseline being
 rounds 112 and 113's runs of the same shape on the stack before the
 change (t2-r966, r968, r970, r972: 2.54 to 2.55 M).
+
+## The size A/B stopped; 48 held for IOPS
+
+Mike stopped the size A/B during t2-r982 (16), which ran to its end:
+"please stop these runs, keep fh_borrow_slots at 48".  At 64 (t2-r981)
+the handles hit 99.78% with no evictions (the 150,491 misses are all
+refills of entries the sweep dropped idle, `fh_aged` the same count),
+against 95.4% and 3.14 M evictions at 16 (t2-r975); the rate was 2.55 M
+against 2.57, within a run's spread.  `settled.sh` gains
+`EXP_FH_BORROW_SLOTS`, held only when set (written with nfs-server
+restarted, as the parameter is read only as a thread or rtc rqst
+starts); `settled-iops.sh` holds 48.

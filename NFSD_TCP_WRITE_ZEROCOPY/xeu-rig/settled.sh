@@ -407,6 +407,13 @@ RTC_BALANCE_SETTLED=$RTC_BALANCE
 # without them is BAD when they are held.
 SVCAUTH_BORROW=${EXP_SVCAUTH_BORROW:-}
 EXPORT_BORROW_SLOTS=${EXP_EXPORT_BORROW_SLOTS:-}
+# nfsd's fh_borrow_slots, the decoded file handles each thread keeps
+# (ecd2a7522e0ee; FLAMEGRAPH round 114), is not held at rest either (its
+# default is 16).  EXP_FH_BORROW_SLOTS (0 to 64) holds a run (and apply)
+# to it; settled-iops.sh holds 48 (Mike, 18 November: "keep
+# fh_borrow_slots at 48").  It is read only as a thread or rtc rqst
+# starts, so a change is written with nfs-server restarted after.
+FH_BORROW_SLOTS=${EXP_FH_BORROW_SLOTS:-}
 # sunrpc's svc_rtc_send_max, the bytes a connection's send queue may hold
 # before its rtc work item takes another call ("SUNRPC: Bound the replies
 # a run-to-completion connection holds", f379dad69c793).  1.5 MiB on
@@ -680,6 +687,7 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ "$RTC_BALANCE" != "$RTC_BALANCE_SETTLED" ] && OFF="$OFF svc_rtc_balance=$RTC_BALANCE"
 	[ -n "$SVCAUTH_BORROW" ] && OFF="$OFF svcauth_borrow=$SVCAUTH_BORROW"
 	[ -n "$EXPORT_BORROW_SLOTS" ] && OFF="$OFF export_borrow_slots=$EXPORT_BORROW_SLOTS"
+	[ -n "$FH_BORROW_SLOTS" ] && OFF="$OFF fh_borrow_slots=$FH_BORROW_SLOTS"
 	[ "$RTC_SEND_MAX" != "$RTC_SEND_MAX_SETTLED" ] && OFF="$OFF svc_rtc_send_max=$RTC_SEND_MAX"
 	[ "$RFS" != "$RFS_SETTLED" ] && OFF="$OFF rfs=$RFS"
 	[ -n "$RPS_CPUS" ] && OFF="$OFF rps=$RPS_CPUS"
@@ -744,6 +752,13 @@ audit_nfsd() {
 			want "nfsd export_borrow_slots" "$(cat /sys/module/nfsd/parameters/export_borrow_slots)" "$EXPORT_BORROW_SLOTS"
 		else
 			bad "nfsd export_borrow_slots" "not in this nfsd" "an nfsd with bbcc6e8d1389d"
+		fi
+	fi
+	if [ -n "$FH_BORROW_SLOTS" ]; then
+		if [ -e /sys/module/nfsd/parameters/fh_borrow_slots ]; then
+			want "nfsd fh_borrow_slots" "$(cat /sys/module/nfsd/parameters/fh_borrow_slots)" "$FH_BORROW_SLOTS"
+		else
+			bad "nfsd fh_borrow_slots" "not in this nfsd" "an nfsd with ecd2a7522e0ee"
 		fi
 	fi
 	if [ -e $SUNRPC/svc_rtc_send_max ]; then
@@ -1066,6 +1081,16 @@ sizes() {
 			systemctl restart nfs-server || return 1
 		else
 			echo "NFS connections are up: nfsd's NFSv4 is left on"
+		fi
+	fi
+	local fhb=/sys/module/nfsd/parameters/fh_borrow_slots
+	if [ -n "$FH_BORROW_SLOTS" ] && [ -w $fhb ] && [ "$(cat $fhb)" != "$FH_BORROW_SLOTS" ]; then
+		if [ -n "${idle:-}" ]; then
+			# read as each thread and rtc rqst starts: restart them
+			echo "nfsd fh_borrow_slots $FH_BORROW_SLOTS (was $(cat $fhb)): restarting nfs-server"
+			echo "$FH_BORROW_SLOTS" > $fhb && systemctl restart nfs-server || return 1
+		else
+			echo "NFS connections are up: nfsd fh_borrow_slots is left at $(cat $fhb)"
 		fi
 	fi
 	local pm=${EXP_POOL_MODE:-$POOL_MODE} cur; cur=$(cat $PM 2>/dev/null)
