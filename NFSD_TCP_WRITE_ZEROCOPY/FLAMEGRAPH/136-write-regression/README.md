@@ -282,3 +282,16 @@ other client change.  Its `net/sunrpc`, `fs/nfs_common`, `fs/lockd`,
 passes, rpciod unbound there (held with `EXP_CLI_WQ`).  About 77.7: the
 regression is in the commits after it; about 74.9: it came with the
 base.
+
+## The bisect (plan)
+
+Mike: "yes, bisect the commits after 1b9af79".  The canary client
+commits came in through merges, so a first-parent list misses them:
+`git bisect start --no-checkout 4c8aa21d29987 1b9af79d9f16f` over the
+client's paths (`net/sunrpc`, `fs/nfs`, `fs/nfs_common`, `fs/lockd`,
+`include/linux/sunrpc`, `nfs_fs.h`, `nfs_xdr.h`, `nfs_page.h`,
+`nfs_fs_sb.h`): 365 candidates, about 8 steps, no checkout.
+`bisect136.sh 1093` runs it: each step one profiled WRITE pass on
+`BISECT_HEAD`'s client stack (`bstep.sh`), good at 76.5 GB/s or more,
+bad at 75.8 or less, a second pass between; a tree that does not
+build is skipped.
