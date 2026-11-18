@@ -221,3 +221,11 @@ entry used last, 30% of the READ pass's, 13% of the WRITE pass's: the
 WRITE pass's 16 jobs a port at iodepth 16 spread more exports over each
 thread.  IOPS are unchanged (2.49 M against 2.47 to 2.48), as the A/B
 said: the limit is not in the lookup.
+
+**Mike, 18 November: "just lower to 74.6, this is a known issue we
+need to get back to later.. IOPS is what matters for now".**  The WRITE
+pass's mark is 74.6 since then (`write-check.sh`, AGENTS.md, WRITE.md;
+77.6 comes back with the client's WRITE path, WRITE.md's TODO 2).
+Under it this build's WRITE pass is t2-r931 RERUN (74.55), t2-r934
+**PASS** (74.98), and the build is kept.  Whether the borrow costs
+WRITEs anything is WRITE.md's TODO 5, after IOPS.
