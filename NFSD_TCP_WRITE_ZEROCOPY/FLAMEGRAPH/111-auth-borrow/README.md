@@ -314,3 +314,33 @@ The first try (02:12) ran nothing: the suite is named
 `sunrpc-nfsd-export-borrow`, and the filter named
 `nfsd_export_borrow`; the test nfsd loaded and unloaded cleanly, no
 KTAP, the stack back after it.  The filter and the results path fixed.
+
+### The export suite's first run (02:26): 31 of 32, and writes into freed memory
+
+`kunit-export.sh /var/tmp/svcstack-541-kunit` (logs
+`/var/tmp/zc-run-logs/kunit-export-541/`): `ok` 1 to 27 and 29 to 32,
+`not ok` 28 `ebt_key_change`, and two workqueue warnings
+(`workqueue.c:2678`, `:2680`, `__queue_delayed_work()` from
+`svc_export_release()` in an RCU callback).  Both the suite's:
+
+- **The warnings.**  The suite's test nets are a zeroed `nfsd_net`, with
+  none of the per-export statistics (`e487e730759a8`, 29 October) set up.
+  Every export the caches made took a share of them, and its release,
+  from RCU after the case had freed the net, took the net's lock and
+  queued its reaper, an uninitialised delayed work.  This tree's
+  `__mod_timer()` does not arm a timer with no function, so no timer
+  is pending; but the lock, the work's pending bit, `wq`, `cpu` and the
+  timer's `expires` were written, most likely in freed memory, perhaps
+  once for each of the 64 test nets (`WARN_ON_ONCE` hides all but the
+  first).  Nothing has faulted since.  `e0e5100a74155` (interface:
+  `export_stats_init()`, `export_stats_shutdown()` for the suites) and
+  `0b5cd6f5bb361` (each test net sets them up, and shuts them down after
+  its caches, which waits for the releases).
+- **`ebt_key_change`** was written for the one-entry slot; with several
+  entries the first pair stays held beside the second (2 references,
+  not 1).  Fixed in `0b5cd6f5bb361`.
+
+The test nfsd rebuilt from the tree (W=1, no warning; its only suite
+`nfsd_export_borrow_suite`); the running stack's nfsd is not changed,
+the interface commit touching nothing nfsd runs.  Next: `kunit-export.sh
+/var/tmp/svcstack-541-kunit` again.
