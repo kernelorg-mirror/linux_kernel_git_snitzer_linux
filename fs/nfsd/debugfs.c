@@ -142,15 +142,20 @@ DEFINE_SHOW_ATTRIBUTE(nfsd_rtc_stats);
  * was the entry used last (mru, stale ones included), entries filled on
  * a miss (fill), fills that dropped a live entry to make room (evict),
  * requests that took the plain lookup (skip), slot drains, and returns
- * without a borrow.  Read-only.
+ * without a borrow; then the file handle borrow's: dentries lent (fh_hit),
+ * eligible handles not kept (fh_miss), decoded handles kept (fh_fill),
+ * fills that dropped a kept one (fh_evict), kept handles found unlinked
+ * (fh_stale) and kept handles the sweep dropped (fh_aged).  Read-only.
  */
 static int nfsd_export_borrow_show(struct seq_file *m, void *v)
 {
 	struct nfsd_exp_borrow_counts c;
 
 	nfsd_exp_borrow_read_counts(&c);
-	seq_printf(m, "hit %lu mru %lu fill %lu evict %lu skip %lu drain %lu bad_return %lu\n",
-		   c.hit, c.mru, c.fill, c.evict, c.skip, c.drain, c.bad_return);
+	seq_printf(m, "hit %lu mru %lu fill %lu evict %lu skip %lu drain %lu bad_return %lu fh_hit %lu fh_miss %lu fh_fill %lu fh_evict %lu fh_stale %lu fh_aged %lu\n",
+		   c.hit, c.mru, c.fill, c.evict, c.skip, c.drain, c.bad_return,
+		   c.fh_hit, c.fh_miss, c.fh_fill, c.fh_evict, c.fh_stale,
+		   c.fh_aged);
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(nfsd_export_borrow);
