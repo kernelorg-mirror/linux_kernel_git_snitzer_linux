@@ -566,3 +566,27 @@ first build without it failed, and it was put back in its place),
 for byte.  The tips before are `kernel-7.3/canary.pre-percpu-revert`
 and `.pre-rdma-revert`.  `rev136.sh`: the WRITE pass,
 the READ pass and IOPS on it (t2-r1118 to r1120).
+
+### The per-CPU choice reverted (22:05 to 22:23): every pass at its best
+
+The client on the tip's stack with the six reverts (sunrpc
+`2355B960B6A9951899AF6B4`; W=1 clean, `xprtrdma/verbs.c` included):
+
+| Run | Test | Result | Beside |
+|---|---|---|---|
+| t2-r1118 | WRITE pass | **78.00 GB/s PASS**, p99 80 / 83 ms, a transport at t9 89 / 95 / 102 | build 469 77.70; N 77.75; per-CPU 74.5 to 74.9 |
+| t2-r1119 | READ pass | 77.84 PASS: port a 40.58, port b 37.25, port b's drives 9.3 GB/s each at 100% busy | N 82.09, drives 10.1 to 10.4 |
+| t2-r1120 | 4 KiB IOPS, iodepth 96 | **3.63 M** (1.81 / 1.81), p99 3.26 / 3.16 ms, 15.34 / 11.64 us of CPU a READ | N 3.52 M; per-CPU 3.48 to 3.57 |
+| t2-r1121 | READ pass again (Mike: "yes, run a second READ pass after IOPS") | **82.24 GB/s PASS** | |
+
+No new kernel warning; the client on build 541's stack and the settled
+setting after.  t2-r1119's shortfall was port b's drives (saturated and
+reading less, both ports' code the same); the second pass reads as N
+did.  **Round 136 is answered: the WRITE regression from 78 to 75
+GB/s was `5555163d661a0`, "SUNRPC: give each CPU its own transport
+under nconnect", which replaced the balanced round-robin over the
+nconnect transports; reverted, with the two homing commits, xprtrdma's
+completions on the home core and round 136's switch and parameter,
+WRITE is back at 78.00, READ at 82.24 and IOPS at 3.63 M.**  At the
+next regroup each revert and the commit it names are dropped together.
+The WRITE mark can go back to 77.6 (`WRITE.md`, TODO 2): Mike's word.
