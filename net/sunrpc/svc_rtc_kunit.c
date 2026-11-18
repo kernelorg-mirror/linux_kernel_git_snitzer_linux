@@ -1570,7 +1570,7 @@ static void rtc_e2e_pool_grow_inflight(struct kunit *test)
 	BUILD_BUG_ON(SVC_RTC_POOL_STEP != 8 || SVC_RTC_CONN_PARKED < 19);
 	pool = rtc_pool_armed(test, e);
 	rtc_e2e_park(test, e, p, 2);
-	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 2);
+	KUNIT_EXPECT_EQ(test, percpu_counter_sum(&pool->parked), 2);
 	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 2);
 	KUNIT_EXPECT_TRUE(test, lwq_empty(&pool->free));
 	rtc_e2e_kick_empty(test, e);
@@ -1582,7 +1582,7 @@ static void rtc_e2e_pool_grow_inflight(struct kunit *test)
 	/* 10 + max(10 / 2, 8) */
 	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 18);
 	rtc_e2e_park(test, e, &p[10], 8);
-	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 18);
+	KUNIT_EXPECT_EQ(test, percpu_counter_sum(&pool->parked), 18);
 	KUNIT_EXPECT_TRUE(test, lwq_empty(&pool->free));
 	rtc_e2e_kick_empty(test, e);
 	/* 18 + max(18 / 2, 8): nine rqsts, two batches */
@@ -1591,7 +1591,7 @@ static void rtc_e2e_pool_grow_inflight(struct kunit *test)
 	/* A grown rqst carries the next call on the fast path. */
 	rtc_e2e_park(test, e, &p[18], 1);
 	rtc_e2e_unpark(e, p, 19);
-	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 0);
+	KUNIT_EXPECT_EQ(test, percpu_counter_sum(&pool->parked), 0);
 	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 0);
 	e->serv->sv_nrthreads = 0;
 	rtc_e2e_done(test, e);
@@ -1611,7 +1611,7 @@ static void rtc_e2e_pool_handoff_no_grow(struct kunit *test)
 
 	pool = rtc_pool_armed(test, e);
 	rtc_e2e_park(test, e, p, 1);
-	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 1);
+	KUNIT_EXPECT_EQ(test, percpu_counter_sum(&pool->parked), 1);
 	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 1);
 	e->complete_eagain = true;
 	svc_rtc_stats_sum(&a);
@@ -1621,11 +1621,11 @@ static void rtc_e2e_pool_handoff_no_grow(struct kunit *test)
 	e->complete_eagain = false;
 	KUNIT_EXPECT_EQ(test, RTC_FB(a, b, SVC_RTC_FB_EAGAIN_COMPLETE), 1);
 	KUNIT_EXPECT_FALSE(test, lwq_empty(&e->serv->sv_pools[0].sp_rtc_rqsts));
-	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 0);
+	KUNIT_EXPECT_EQ(test, percpu_counter_sum(&pool->parked), 0);
 	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 0);
 	/* The other rqst parks: one of two parked, under 3/4. */
 	rtc_e2e_park(test, e, &p[1], 1);
-	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 1);
+	KUNIT_EXPECT_EQ(test, percpu_counter_sum(&pool->parked), 1);
 	KUNIT_EXPECT_TRUE(test, lwq_empty(&pool->free));
 	rtc_e2e_kick_empty(test, e);
 	KUNIT_EXPECT_EQ(test, READ_ONCE(e->serv->sv_rtc_nr), 2);
@@ -1636,7 +1636,7 @@ static void rtc_e2e_pool_handoff_no_grow(struct kunit *test)
 	svc_rqst_free(thr);
 	KUNIT_EXPECT_TRUE(test, lwq_empty(&e->serv->sv_pools[0].sp_rtc_rqsts));
 	rtc_e2e_unpark(e, &p[1], 1);
-	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 0);
+	KUNIT_EXPECT_EQ(test, percpu_counter_sum(&pool->parked), 0);
 	e->serv->sv_nrthreads = 0;
 	rtc_e2e_done(test, e);
 }
@@ -1681,7 +1681,7 @@ static void rtc_e2e_pool_serv_ceiling(struct kunit *test)
 			SVC_RTC_CONN_PARKED);
 	KUNIT_EXPECT_EQ(test, pool->want, SVC_RTC_CONN_PARKED);
 	rtc_e2e_park(test, e, &pa[9], 7);
-	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), SVC_RTC_CONN_PARKED);
+	KUNIT_EXPECT_EQ(test, percpu_counter_sum(&pool->parked), SVC_RTC_CONN_PARKED);
 	KUNIT_EXPECT_EQ(test, atomic_read(&e->xprt.xpt_rtc->parked), 16);
 	KUNIT_EXPECT_EQ(test, atomic_read(&e2->xprt.xpt_rtc->parked), 16);
 
@@ -1708,7 +1708,7 @@ static void rtc_e2e_pool_serv_ceiling(struct kunit *test)
 	rtc_e2e_unpark(e2, pb, 17);
 	rtc_e2e_cur = e;
 	rtc_e2e_unpark(e, pa, 15);
-	KUNIT_EXPECT_EQ(test, atomic_read(&pool->parked), 0);
+	KUNIT_EXPECT_EQ(test, percpu_counter_sum(&pool->parked), 0);
 	KUNIT_EXPECT_EQ(test, atomic_read(&e2->xprt.xpt_rtc->parked), 0);
 	e->serv->sv_nrthreads = 0;
 	rtc_e2e_done2(test, e, e2);
