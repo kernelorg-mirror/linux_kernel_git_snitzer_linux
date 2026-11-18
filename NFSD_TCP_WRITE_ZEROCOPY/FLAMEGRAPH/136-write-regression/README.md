@@ -403,3 +403,17 @@ not apply on the Makefile and is left out too.  Stage B is tree
 `f1fc2b1c481cd`, `990e699092959`, `334ea04bd3718`, `7661739461aab`,
 `fadc8f0ee0291` and `4b593427d660b`; stage A `3a085ef0f1dd1`, B with
 the four per-CPU commits.  t2-r1100 and t2-r1101.
+
+### The forward stages (20:49 to 20:56)
+
+| Run | Client stack (on 541's kernel) | WRITE GB/s | p99 a / b (ms) | A transport at t9: min / median / max (sum) |
+|---|---|---|---|---|
+| t2-r1100 | B, `31ab8c4904ec7` | 77.61 | 83 / 83 | 92 / 98 / 104 (3136) |
+| t2-r1101 | A, `3a085ef0f1dd1`: B + the four per-CPU commits | 73.03 (RERUN) | 163 / 169 | 0 / 124 / 260 (3316) |
+
+The four per-CPU commits together are the window's regression, with
+541's rate and 541's tail.  The other eight are cleared.  Next, B with
+each of the four alone, one pass each: t2-r1102 `5555163d661a0` (tree
+`71a3b2fe007ff`), t2-r1103 `ba5642ee4cac2` (`4663a8f8ea627`), t2-r1104
+`50eee8803afc5` (`a1d55250943a8`), t2-r1105 `ccaaf769083fe`
+(`ada5c03fe2459`).
