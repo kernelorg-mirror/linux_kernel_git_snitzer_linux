@@ -47,3 +47,6 @@ saving.  `perf annotate`: the function's samples are on loads every hit
 makes anyway, the matched entry's dentry (about 24%), the MRU entry's
 (10%), the inode's i_nlink for the unlinked check (about 14%); the scan
 was never the cost.  Proposed to Mike: revert it too.
+
+The tag array was dropped too (Mike: "revert the tag array and look at
+park/unpark"); the tip before is `kernel-7.3/canary.pre-drop-fh-tag`.
