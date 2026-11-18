@@ -1288,6 +1288,7 @@ void svc_rtc_stats_show(struct seq_file *m)
 		[SVC_RTC_FB_CONN_FULL]	= "conn_full",
 		[SVC_RTC_FB_SERV_FULL]	= "serv_full",
 		[SVC_RTC_FB_DIR_OFF]	= "dir_off",
+		[SVC_RTC_FB_PARTIAL]	= "partial",
 	};
 	struct svc_rtc_stats s;
 	int i;
@@ -1974,8 +1975,9 @@ static bool svc_rtc_divert(struct svc_xprt *xprt)
  * @opsp: OUT (may be NULL): the hook, when the verdict is %SVC_RTC_FAST
  *
  * Return: %SVC_RTC_THREAD to queue @xprt on a thread (XPT_BUSY passes to
- * it), or %SVC_RTC_IDLE when @xprt is dead (XPT_BUSY stays set, as on any
- * dead transport).
+ * it), %SVC_RTC_WAIT to release @xprt until the rest of a partly received
+ * call header arrives, or %SVC_RTC_IDLE when @xprt is dead (XPT_BUSY
+ * stays set, as on any dead transport).
  */
 VISIBLE_IF_KUNIT enum svc_rtc_verdict
 svc_rtc_recv_step(struct svc_xprt *xprt, enum svc_rtc_reason *reason,
@@ -2018,8 +2020,18 @@ svc_rtc_recv_step(struct svc_xprt *xprt, enum svc_rtc_reason *reason,
 	 * @ops stays valid after rcu_read_unlock(): this run holds
 	 * sv_rtc_active, which svc_rtc_unregister() waits for.
 	 */
-	if (!xprt->xpt_ops || !xprt->xpt_ops->xpo_peek_call ||
-	    xprt->xpt_ops->xpo_peek_call(xprt, &prog, &vers, &proc, &flavor)) {
+	if (!xprt->xpt_ops || !xprt->xpt_ops->xpo_peek_call) {
+		*reason = SVC_RTC_FB_NO_PEEK;
+		return SVC_RTC_THREAD;
+	}
+	switch (xprt->xpt_ops->xpo_peek_call(xprt, &prog, &vers, &proc,
+					     &flavor)) {
+	case 0:
+		break;
+	case -ENODATA:
+		*reason = SVC_RTC_FB_PARTIAL;
+		return SVC_RTC_WAIT;
+	default:
 		*reason = SVC_RTC_FB_NO_PEEK;
 		return SVC_RTC_THREAD;
 	}
@@ -2163,6 +2175,11 @@ static void svc_rtc_work(struct work_struct *work)
 			break;
 		case SVC_RTC_FAST:
 			svc_rtc_fast(conn);
+			break;
+		case SVC_RTC_WAIT:
+			/* Released last, as a held receive is. */
+			svc_rtc_stat_inc(fallback[reason]);
+			hold = true;
 			break;
 		default:
 			svc_rtc_stat_inc(fallback[reason]);

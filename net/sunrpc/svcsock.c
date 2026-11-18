@@ -7112,6 +7112,12 @@ static struct svc_xprt *svc_tcp_create(struct svc_serv *serv,
  * Peek at the next call's header without consuming it.  Only a call that
  * starts a fresh, single-fragment record with nothing buffered is peeked;
  * anything else is left to the thread path's receive.
+ *
+ * A fresh record whose header is not all in yet is waited for: XPT_DATA
+ * is cleared and the socket peeked again, so that the rest, arriving
+ * either before the second peek or after it (svc_data_ready() sets
+ * XPT_DATA again), enqueues the transport once its holder releases it.
+ * A thread would only find the same partial header.
  */
 static int svc_tcp_peek_call(struct svc_xprt *xprt, u32 *prog, u32 *vers,
 			     u32 *proc, u32 *flavor)
@@ -7129,6 +7135,15 @@ static int svc_tcp_peek_call(struct svc_xprt *xprt, u32 *prog, u32 *vers,
 		return -EAGAIN;
 	len = kernel_recvmsg(svsk->sk_sock, &msg, &iov, 1, sizeof(w),
 			     MSG_PEEK | MSG_DONTWAIT);
+	if (len == -EAGAIN || (len > 0 && len < (int)sizeof(w))) {
+		clear_bit(XPT_DATA, &xprt->xpt_flags);
+		smp_mb__after_atomic();
+		len = kernel_recvmsg(svsk->sk_sock, &msg, &iov, 1, sizeof(w),
+				     MSG_PEEK | MSG_DONTWAIT);
+		if (len == sizeof(w))
+			set_bit(XPT_DATA, &xprt->xpt_flags);
+		return -ENODATA;
+	}
 	if (len != sizeof(w))
 		return -EAGAIN;
 	marker = be32_to_cpu(w[0]);
