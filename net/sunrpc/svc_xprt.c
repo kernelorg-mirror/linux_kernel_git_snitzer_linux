@@ -2329,12 +2329,17 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
 	if (!pool)
 		return -ENOMEM;
+	if (percpu_counter_init(&pool->parked, 0, GFP_KERNEL)) {
+		kfree(pool);
+		return -ENOMEM;
+	}
 	pool->ops = ops;
 	pool->serv = serv;
 	lwq_init(&pool->free);
 	pool->nshard = nr_cpu_ids;
 	pool->shard = kcalloc(pool->nshard, sizeof(*pool->shard), GFP_KERNEL);
 	if (!pool->shard) {
+		percpu_counter_destroy(&pool->parked);
 		kfree(pool);
 		return -ENOMEM;
 	}
@@ -2354,6 +2359,7 @@ int svc_rtc_register(struct svc_serv *serv, const struct svc_rtc_ops *ops)
 	}
 	mutex_unlock(&svc_rtc_mutex);
 	if (ret) {
+		percpu_counter_destroy(&pool->parked);
 		kfree(pool->shard);
 		kfree(pool);
 	}
@@ -3110,6 +3116,13 @@ out:
  * item parks, so svc_rtc_fast() reads an exact per-connection count.
  * The pool high water is a racy max: a decay hint.
  */
+/*
+ * The pool's parked count folds a CPU's delta into the shared count past
+ * this many: off by at most this times the CPUs, against a ceiling of
+ * SVC_RTC_CONN_PARKED a thread.
+ */
+#define SVC_RTC_PARKED_BATCH	64
+
 static void svc_rtc_park(struct svc_rtc_rqst *r)
 {
 	struct svc_rtc_pool *pool = r->rqstp->rq_server->sv_rtc_pool;
@@ -3122,7 +3135,8 @@ static void svc_rtc_park(struct svc_rtc_rqst *r)
 	/* nfsd's READ has narrowed rq_reserved to its reply (svc_reserve()). */
 	r->promised = max(r->rqstp->rq_reserved, 0);
 	atomic_long_add(r->promised, &r->conn->parked_bytes);
-	n = atomic_inc_return(&pool->parked);
+	percpu_counter_add_batch(&pool->parked, 1, SVC_RTC_PARKED_BATCH);
+	n = max_t(s64, percpu_counter_read(&pool->parked), 0);
 	if (n > READ_ONCE(pool->hw))
 		WRITE_ONCE(pool->hw, n);
 }
@@ -3144,7 +3158,8 @@ static void svc_rtc_unpark(struct svc_rtc_rqst *r)
 		return;
 	r->parked = false;
 	atomic_dec(&conn->parked);
-	atomic_dec(&r->rqstp->rq_server->sv_rtc_pool->parked);
+	percpu_counter_add_batch(&r->rqstp->rq_server->sv_rtc_pool->parked, -1,
+				 SVC_RTC_PARKED_BATCH);
 	atomic_long_sub(r->promised, &conn->parked_bytes);
 	r->promised = 0;
 	if (!READ_ONCE(svc_rtc_send_max))
@@ -3454,7 +3469,8 @@ static void svc_rtc_fast(struct svc_rtc_conn *conn)
 		goto thread;
 	}
 	/* Other connections park concurrently: a ceiling, not a count. */
-	if (pool && atomic_read(&pool->parked) >= svc_rtc_parked_max(serv)) {
+	if (pool && percpu_counter_read(&pool->parked) >=
+		    svc_rtc_parked_max(serv)) {
 		reason = SVC_RTC_FB_SERV_FULL;
 		goto thread;
 	}
@@ -3547,6 +3563,7 @@ static void svc_rtc_pool_free(struct svc_rtc_pool *pool)
 		list_del(&r->all);
 		svc_rtc_rqst_destroy(pool->ops, r);
 	}
+	percpu_counter_destroy(&pool->parked);
 	kfree(pool->shard);
 	kfree(pool);
 }
@@ -3701,7 +3718,7 @@ static void svc_rtc_pool_fill(struct work_struct *work)
 	    !test_bit(SVC_RTC_POOL_NOGROW, &pool->flags) &&
 	    svc_rtc_pool_empty(pool) &&
 	    pool->nr >= READ_ONCE(serv->sv_nrthreads)) {
-		parked = atomic_read(&pool->parked);
+		parked = max_t(s64, percpu_counter_sum(&pool->parked), 0);
 		if (parked * 4 >= pool->nr * 3) {
 			pool->want = max(pool->want,
 					 min(svc_rtc_pool_headroom(parked),
@@ -3731,7 +3748,7 @@ static void svc_rtc_pool_decay(struct work_struct *work)
 		mutex_unlock(&svc_rtc_mutex);
 		return;
 	}
-	now = atomic_read(&pool->parked);
+	now = max_t(s64, percpu_counter_sum(&pool->parked), 0);
 	recent = max(READ_ONCE(pool->hw), now);
 	WRITE_ONCE(pool->hw, now);
 	pool->want = min(pool->want, svc_rtc_pool_headroom(recent));

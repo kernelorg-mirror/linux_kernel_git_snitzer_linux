@@ -9,6 +9,7 @@
 #define SUNRPC_SVC_XPRT_H
 
 #include <linux/sunrpc/svc.h>
+#include <linux/percpu_counter.h>
 #include <linux/llist.h>
 #include <linux/workqueue.h>
 
@@ -284,8 +285,12 @@ struct svc_rtc_pool {
 	struct svc_serv		*serv;
 	struct work_struct	fill;	/* svc_rtc_pool_arm() */
 	struct delayed_work	decay;	/* SVC_RTC_POOL_DECAY after growth */
-	/* Written by every async call: off the sizing fields' cacheline. */
-	atomic_t		parked ____cacheline_aligned_in_smp;
+	/*
+	 * Written by every async call, park and unpark: per CPU, so that the
+	 * CPUs do not pass one line between them.  Approximate on the hot
+	 * path (the ceiling, the high water), summed exactly where sized.
+	 */
+	struct percpu_counter	parked ____cacheline_aligned_in_smp;
 	unsigned int		hw;	/* parked high water this period */
 };
 
