@@ -417,3 +417,39 @@ each of the four alone, one pass each: t2-r1102 `5555163d661a0` (tree
 `71a3b2fe007ff`), t2-r1103 `ba5642ee4cac2` (`4663a8f8ea627`), t2-r1104
 `50eee8803afc5` (`a1d55250943a8`), t2-r1105 `ccaaf769083fe`
 (`ada5c03fe2459`).
+
+### Each of the four alone on B (20:56 to 21:11): the per-CPU choice
+
+| Run | Client stack (on 541's kernel) | WRITE GB/s | p99 a / b (ms) | A transport at t9: min / median / max (sum) |
+|---|---|---|---|---|
+| t2-r1100 | B | 77.61 | 83 / 83 | 92 / 98 / 104 (3136) |
+| t2-r1102 | B + `5555163d661a0` (the per-CPU choice) | 72.83 (RERUN) | 165 / 169 | 0 / 90 / 303 (3321) |
+| t2-r1103 | B + `ba5642ee4cac2` (sending to pending) | 77.88 | 81 / 81 | 83 / 89 / 95 (2822) |
+| t2-r1104 | B + `50eee8803afc5` (first leg in the caller) | 77.59 | 84 / 82 | 82 / 92 / 99 (2898) |
+| t2-r1105 | B + `ccaaf769083fe` (rpciod per-CPU) | 77.85 | 81 / 83 | 88 / 94 / 104 (3006) |
+
+**`5555163d661a0`, "SUNRPC: give each CPU its own transport under
+nconnect", is the regression, whole.**  The other three cost nothing.
+
+Why its A/B switch (`xprt_percpu_choice_ab=N`, t2-r1081 and r1083:
+72.49 and 72.61) never brought the rate back: the commit does three
+things, and the switch turns off only the first.
+
+1. The per-CPU choice: a CPU's own transport, spilling to round-robin
+   only once it holds 64 tasks and the round-robin pick fewer than half
+   as many.
+2. It deletes round-robin's queue-length balancing,
+   `xprt_switch_find_next_entry_roundrobin()`'s skip of any transport
+   holding more than the average (`xprt_queuelen * nactive <=
+   xps_queuelen`), with `xps_queuelen`.  That is what held build 469's
+   transports even, 82 to 104 at t9.
+3. It queues a transport's receive work on its home CPU
+   (`xprt_queue_work()` in `xs_data_ready()` and
+   `xs_poll_check_readable()`).
+
+With the switch at N, a task takes plain round-robin with no balancing
+(2): the tail comes back to 84 to 89 ms, but transports run empty while
+others hold 200 (t2-r1098, every per-CPU placement off: 0 / 22 / 200,
+about 1,500 in all) and the rate is lower still.  With it at Y (1), the
+transports stay full but 0 to 300 apart, and a WRITE waits behind the
+deepest: p99 150 to 170 ms.
