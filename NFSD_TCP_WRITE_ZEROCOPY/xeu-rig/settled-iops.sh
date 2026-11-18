@@ -22,6 +22,13 @@
 #                             r975)                    EXP_FH_BORROW_SLOTS
 #                             (Mike, 18 November: "keep fh_borrow_slots
 #                             at 48")
+#   sunrpc.svc_rtc_spill_cpus 0-7,56-63 at svc_rtc_spill_weight 1
+#                             the rtc balance spilling onto the ring CPUs,
+#                             one connection each at most: 2.73 to 2.78 M
+#                             IOPS against 2.57 to 2.58 off (round 116,
+#                             t2-r995 to r1000; Mike, 18 November: "add
+#                             the spill at weight 1 to settled-iops.sh")
+#                                  EXP_RTC_SPILL_CPUS, EXP_RTC_SPILL_WEIGHT
 #
 # The two borrows since 18 November (Mike: "add both to settled-iops.sh"):
 # their defaults, which settled.sh does not hold at rest; held here, a
@@ -95,6 +102,8 @@ export EXP_POOL_MODE=${EXP_POOL_MODE:-percpu}
 export EXP_SVCAUTH_BORROW=${EXP_SVCAUTH_BORROW:-Y}
 export EXP_EXPORT_BORROW_SLOTS=${EXP_EXPORT_BORROW_SLOTS:-16}
 export EXP_FH_BORROW_SLOTS=${EXP_FH_BORROW_SLOTS:-48}
+export EXP_RTC_SPILL_CPUS=${EXP_RTC_SPILL_CPUS:-0-7,56-63}
+export EXP_RTC_SPILL_WEIGHT=${EXP_RTC_SPILL_WEIGHT:-1}
 export EXP_SYSCTL=${EXP_SYSCTL:-"net.core.rmem_max=268435456;net.core.wmem_max=268435456;net.ipv4.tcp_rmem=4096 1048576 268435456;net.ipv4.tcp_wmem=4096 1048576 268435456"}
 case "${1:-}" in
 apply|audit) exec ./settled.sh "$@" ;;
@@ -105,7 +114,8 @@ run)
 	export RW=${RW:-randread} BS=${BS:-4k} IOENGINE=${IOENGINE:-io_uring} FIXEDBUFS=${FIXEDBUFS-1}
 	"$@"; rc=$?
 	env -u EXP_NFSD_THREADS -u EXP_SYSCTL -u EXP_POOL_MODE -u EXP_SVCAUTH_BORROW \
-		-u EXP_EXPORT_BORROW_SLOTS -u EXP_FH_BORROW_SLOTS ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
+		-u EXP_EXPORT_BORROW_SLOTS -u EXP_FH_BORROW_SLOTS \
+		-u EXP_RTC_SPILL_CPUS -u EXP_RTC_SPILL_WEIGHT ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
 	echo "settled again: $(tail -1 /var/tmp/zc-run-logs/settled-iops-after.txt)"
 	exit $rc ;;
 *) echo "settled-iops.sh apply|audit|run <command ...>"; exit 1 ;;
