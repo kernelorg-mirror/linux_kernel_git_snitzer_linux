@@ -625,3 +625,10 @@ Again (Mike: "run the 4K IOPS test again"): t2-r1125 **3.51 M IOPS**
 (1.76 / 1.75 M), p99 3.33 / 3.42 ms, 16.05 / 11.90 us of CPU a READ,
 no new kernel warning.  The same modules as t2-r1120 byte for byte, so
 3.51 to 3.63 M is the spread from run to run on this stack.
+
+At iodepth 128 (Mike: "run the 4K IOPS test at iodepth 128"): t2-r1126
+**3.65 M IOPS** (1.83 / 1.82 M), completion mean 1.67 / 1.69 ms, p99
+3.65 / 3.69, 15.25 / 11.84 us of CPU a READ, the server 87% busy (its
+busiest CPU 100%), the client 90% (98%), no new kernel warning.  A
+third more in flight than at 96 (3.51 to 3.63 M) gives 1 to 4% more
+READs and about 10% longer completions.
