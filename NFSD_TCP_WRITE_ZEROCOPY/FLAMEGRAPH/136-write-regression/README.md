@@ -330,3 +330,25 @@ with one suspect reversed, in a scratch index (`git apply -R
 `d1ea6a2aeac37` (`0ff4ac893e92c`) reverse cleanly; `7661739461aab`
 and `f1fc2b1c481cd` do not, and wait.  First the two: t2-r1096 without
 the first leg in the caller, t2-r1097 without the hand to pending.
+
+### The two reversals (20:32 to 20:40), and every per-CPU placement off at once (plan)
+
+| Run | Client stack (on 541's kernel) | WRITE GB/s | p99 a / b (ms) | A transport at t9: min / median / max |
+|---|---|---|---|---|
+| t2-r1097 | 541 without `ba5642ee4cac2` (send to pending) | 74.75 | 156 / 152 | 35 / 121 / 313 |
+| t2-r1096 | 541 without `50eee8803afc5` (first leg in the caller; the whole commit, its trace header too, tree `74f50237a77b6`: the first try, `d2d378fde1bb1`, left `RPC_TASK_INLINE_OK` in the trace header and did not build) | 74.49 (RERUN) | 158 / 150 | 6 / 103 / 274 |
+
+Neither alone.  Of the suspects left, `7661739461aab` only raises
+`NFS_MAX_CONNECTIONS` from 16 to 128 (nothing sizes by it at nconnect
+16), and `f1fc2b1c481cd` is NFSv4 (idmapping, `nfs4file.c`,
+`auth_name`) and an `rpc_completion` API NFSv3 does not call, and does
+not touch the O_DIRECT WRITE path (`direct.c`, `write.c`,
+`pagelist.c`).  Left: the per-CPU commits together.  Each keeps a WRITE
+on the CPU that submitted it (the per-CPU transport choice, rpciod
+per-CPU, the first leg in the caller, the hand to pending), so with any
+one taken out the others still hold the work where it was.  The test:
+the tip's tree (`298c732504785`, the choice switch and
+`rpciod_per_cpu` in it) with `50eee8803afc5` and `ba5642ee4cac2`
+reversed (tree `fa0c06559fe5b`), loaded with `rpciod_per_cpu=N` and
+run with `xprt_percpu_choice_ab=N` (`bstep.sh`'s new `CLI_PRE`): every
+per-CPU placement off.  Two passes, t2-r1098 and t2-r1099.
