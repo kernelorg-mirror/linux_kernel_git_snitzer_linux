@@ -295,3 +295,38 @@ client's paths (`net/sunrpc`, `fs/nfs`, `fs/nfs_common`, `fs/lockd`,
 `BISECT_HEAD`'s client stack (`bstep.sh`), good at 76.5 GB/s or more,
 bad at 75.8 or less, a second pass between; a tree that does not
 build is skipped.
+
+### The bisect's first steps (20:23 to 20:31), then reversals on 541's tree
+
+| Step | Commit | Run | WRITE GB/s | Verdict |
+|---|---|---|---|---|
+| 1 | `e8f1a72bb9b25` | t2-r1093 | 77.91 | good |
+| 2 | `5e543e08a2506` | t2-r1094 | 73.19 | bad |
+| 3 | `4ae3b1029cbde` | | | skipped: does not build |
+| 4 | `7661739461aab` | | | skipped: does not build |
+| 5 | `ae24cc81bcd3e` | (t2-r1095 aborted when the bisect was stopped, in its trim) | | |
+
+The good step already holds `32faf45611a7d`, `d398df1554edd` and
+`bcd79ae606aa8`: they are cleared.  From `4ae3b1029cbde` ("net:
+rx_loan: move the receive page-loan machinery out of sunrpc") the
+middle trees' `svcsock.c` calls an older `rx_loan_admit()`,
+`rx_loan_grant_return()` and `rx_loan_region_put()` than build 541's
+kernel has, and does not compile; the bisect was stopped (its state is
+kept).  The window, read: 13 commits touch the client's own files, of
+which the server's receive and send (`4b593427d660b`, `fadc8f0ee0291`,
+`aa4297a0999a7`), LOCALIO (`990e699092959`, `f49804fcf59e7`), the
+NOWAIT write (`334ea04bd3718`, io_uring NOWAIT only) and the two
+already switched off (`ccaaf769083fe`, `5555163d661a0`) cannot be it;
+left are the first RPC leg in the caller (`50eee8803afc5`), the hand
+from sending to pending (`ba5642ee4cac2`), nconnect up to 128
+(`7661739461aab`), the Hammerspace private extensions
+(`f1fc2b1c481cd`) and the KCSAN annotations (`d1ea6a2aeac37`).
+
+So from the other end: build 541's own tree (`4c8aa21d29987`, 74.9)
+with one suspect reversed, in a scratch index (`git apply -R
+--cached`, no checkout), each built against 541's kernel with
+`bstep.sh` and one profiled WRITE pass.  `50eee8803afc5` (tree
+`d2d378fde1bb1`), `ba5642ee4cac2` (`1a15470c5ff65`) and
+`d1ea6a2aeac37` (`0ff4ac893e92c`) reverse cleanly; `7661739461aab`
+and `f1fc2b1c481cd` do not, and wait.  First the two: t2-r1096 without
+the first leg in the caller, t2-r1097 without the hand to pending.
