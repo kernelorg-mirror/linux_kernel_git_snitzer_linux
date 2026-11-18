@@ -150,3 +150,20 @@ half as many, which at 100 to 300 queued a transport rarely holds.
 The 469 runs' nstat deltas (second 4 to 14): the client retransmitted
 955 segments of 115 million and timed out once; the server none to
 speak of.
+
+## Back on build 541: the per-CPU choice A/B (plan)
+
+Mike rebooted the client into build 541 at about 19:11 (default set
+back with `grub2-set-default`); sunrpc `225361815EB170B866C5033`, both
+ports, the audit at the settled setting without overrides.
+
+`a60960b6a6f99` "DROP: SUNRPC: A/B switch for FLAMEGRAPH round 136":
+`sunrpc.xprt_percpu_choice_ab` N makes `xprt_iter_next_entry_percpu()`
+take the round-robin transport for every task, as build 469 does; the
+rest of the per-CPU map (each transport's home CPU, the reply worker
+queued there) is unchanged.  W=1 clean.  The client's stack is built
+from it with `cbuild132.sh` into `/root/zc-ckern/T` and loaded with
+`cswap131.sh` (client side only), then `ab-choice.sh 1080:Y 1081:N
+1082:Y 1083:N 1084:Y:pin0`: each a profiled WRITE pass
+(`prof-write.sh`), the last with fio's writers unpinned (`PIN=0`).
+The client back on build 541's stack after.
