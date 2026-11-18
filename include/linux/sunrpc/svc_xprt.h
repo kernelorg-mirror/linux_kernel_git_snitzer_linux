@@ -59,7 +59,10 @@ struct svc_xprt_ops {
 	/*
 	 * Read the next call's program, version and procedure without
 	 * consuming it.  Called with XPT_BUSY held; must not sleep.
-	 * Returns 0, or -EAGAIN when the header is not at hand.
+	 * Returns 0; -ENODATA when a fresh record has not all of its
+	 * header in yet, with XPT_DATA cleared unless more data came since,
+	 * so that the arrival of the rest enqueues the transport again; or
+	 * -EAGAIN when the header is not at hand otherwise.
 	 */
 	int		(*xpo_peek_call)(struct svc_xprt *xprt, u32 *prog,
 					   u32 *vers, u32 *proc, u32 *flavor);
@@ -161,6 +164,7 @@ enum svc_rtc_reason {
 	SVC_RTC_FB_CONN_FULL,		/* SVC_RTC_CONN_PARKED calls parked */
 	SVC_RTC_FB_SERV_FULL,		/* svc_rtc_parked_max() calls parked */
 	SVC_RTC_FB_DIR_OFF,		/* its direction switched off after peek */
+	SVC_RTC_FB_PARTIAL,		/* header not all in: wait for the rest */
 	SVC_RTC_NR_REASONS
 };
 
@@ -169,6 +173,7 @@ enum svc_rtc_verdict {
 	SVC_RTC_IDLE,			/* nothing more to do */
 	SVC_RTC_REQUEUE,		/* budget used up: run again */
 	SVC_RTC_FAST,			/* serve the next call on a work item */
+	SVC_RTC_WAIT,			/* release; the rest's arrival enqueues */
 };
 
 struct svc_rtc_ops {
