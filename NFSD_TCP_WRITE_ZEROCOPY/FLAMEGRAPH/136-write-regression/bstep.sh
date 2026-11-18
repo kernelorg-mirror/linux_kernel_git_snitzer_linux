@@ -14,8 +14,9 @@ say() { echo "$(date +%T) $*"; }
 inc=$(git ls-tree --name-only -r $c include/linux/ include/trace/ | grep -E '^include/linux/(sunrpc|lockd)/|^include/linux/nfs[^/]*\.h$|^include/trace/(events|misc)/(sunrpc|nfs)[^/]*\.h$|^include/linux/skbuff_ref\.h$')
 git archive $c net/sunrpc fs/nfs_common fs/lockd fs/nfs $inc |
 	$SSHC "rm -rf /root/zc-ckern/$d && mkdir -p /root/zc-ckern/$d && tar -x -C /root/zc-ckern/$d && echo $(git rev-parse --short=13 $c) > /root/zc-ckern/$d/COMMIT"
-$SSHC "/root/zc-ckern/cbuild136.sh /root/zc-ckern/$d" 2>&1 | tail -3 || exit 1
-[ -e /dev/null ] && $SSHC "test -s /root/zc-ckern/$d/root/lib/modules/\$(uname -r)/updates/nfs.ko" || { say "$c: build failed"; exit 1; }
+$SSHC 'cat > /root/zc-ckern/cbuild136.sh && chmod +x /root/zc-ckern/cbuild136.sh' < NFSD_TCP_WRITE_ZEROCOPY/FLAMEGRAPH/136-write-regression/cbuild136.sh
+$SSHC "/root/zc-ckern/cbuild136.sh /root/zc-ckern/$d" 2>&1 | tail -4
+$SSHC "test -s /root/zc-ckern/$d/root/lib/modules/\$(uname -r)/updates/nfs.ko" || { say "$c: build failed"; exit 1; }
 say "swap: $($SSHC "NFSM='sunrpc nfsv3 nfsv4' /root/zc-csunrpc/cswap131.sh /root/zc-ckern/$d/root/ 2>&1 | tail -1")"
 w=$($SSHC 'cat /sys/devices/virtual/workqueue/rpciod/per_cpu')
 cd NFSD_TCP_WRITE_ZEROCOPY/xeu-rig
