@@ -19,6 +19,8 @@ $SSHC "/root/zc-ckern/cbuild136.sh /root/zc-ckern/$d" 2>&1 | tail -4
 $SSHC "test -s /root/zc-ckern/$d/root/lib/modules/\$(uname -r)/updates/nfs.ko" || { say "$c: build failed"; exit 1; }
 say "swap: $($SSHC "NFSM='sunrpc nfsv3 nfsv4' /root/zc-csunrpc/cswap131.sh /root/zc-ckern/$d/root/ 2>&1 | tail -1")"
 w=$($SSHC 'cat /sys/devices/virtual/workqueue/rpciod/per_cpu')
+# CLI_PRE: a command run on the client after the swap, before the runs
+[ -n "${CLI_PRE:-}" ] && say "client: $($SSHC "$CLI_PRE")"
 cd NFSD_TCP_WRITE_ZEROCOPY/xeu-rig
 for n in "$@"; do
 	[ -e $L/t2-r$n ] && { say "t2-r$n exists"; break; }
