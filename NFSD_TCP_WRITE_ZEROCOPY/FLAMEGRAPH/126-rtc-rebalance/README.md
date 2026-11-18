@@ -41,3 +41,13 @@ On: 2.91 M and 17.04 us a READ; off: 2.87 M and 17.06 (with round
 way, about the spread; CPU a READ level.  The least busy work CPU 58 to
 59% on against 46 to 55% off, the least busy ring CPU 59 to 64% against
 24 to 26%; one CPU still reaches 100% on.  No new kernel warning.
+
+## Held, and tcp_limit_output_bytes again under it
+
+Mike, 18 November: "set svc_rtc_rebalance_ms to 250 in settled-iops.sh
+and then please do 3 quick additional runs using rebalancer with
+tcp_limit_output_bytes back to 256K and then 512K and then 1 MiB".
+`settled.sh` holds `svc_rtc_rebalance_ms` (0 at rest,
+`EXP_RTC_REBALANCE_MS` for a run) and `settled-iops.sh` 250.  Runs:
+t2-r1042 `EXP_TCP_LOB=262144`, r1043 524288, r1044 1048576, against
+r1038 and r1040 at 4 MiB.
