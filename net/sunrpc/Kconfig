@@ -123,6 +123,21 @@ config SUNRPC_CACHE_KUNIT_TEST
 
 	  For more information, see Documentation/dev-tools/kunit/.
 
+config SUNRPC_SVCAUTH_UNIX_KUNIT_TEST
+	tristate "KUnit tests for the SUNRPC AUTH_SYS per-rqst borrow" if !KUNIT_ALL_TESTS
+	depends on KUNIT && SUNRPC
+	default KUNIT_ALL_TESTS
+	help
+	  Build focused tests for svcauth_unix's per-rqst cache of ip_maps
+	  and gids: a hit lends the domain and groups without a reference,
+	  a replaced, aged or negative entry misses, the least recently
+	  used entry is replaced, gss does not borrow, and freeing the rqst
+	  drops every reference.  The tests run on their own caches and
+	  touch no live ones.  They are intended for kernel developers and
+	  are not useful in a production kernel.
+
+	  For more information, see Documentation/dev-tools/kunit/.
+
 config SUNRPC_XPRT_RDMA
 	tristate "RPC-over-RDMA transport"
 	depends on SUNRPC && INFINIBAND && INFINIBAND_ADDR_TRANS
