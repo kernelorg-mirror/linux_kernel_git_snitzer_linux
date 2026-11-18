@@ -35,6 +35,11 @@
 #                             0.3 ms lower (round 120, t2-r1009 to r1014;
 #                             Mike, 18 November: "worth adding to
 #                             settled-iops.sh")          EXP_RTC_SEND_MORE
+#   net.ipv4.tcp_limit_output_bytes 4 MiB  (settled on tardis2: 256 KiB)
+#                             0.2 us less server CPU a READ, 2.90 M IOPS
+#                             against 2.865 (round 125, t2-r1030 to r1033;
+#                             Mike, 18 November: "use tcp_limit_output_bytes
+#                             of 4 MiB in settled-iops.sh")     EXP_TCP_LOB
 #
 # The two borrows since 18 November (Mike: "add both to settled-iops.sh"):
 # their defaults, which settled.sh does not hold at rest; held here, a
@@ -111,6 +116,7 @@ export EXP_FH_BORROW_SLOTS=${EXP_FH_BORROW_SLOTS:-48}
 export EXP_RTC_SPILL_CPUS=${EXP_RTC_SPILL_CPUS:-0-7,56-63}
 export EXP_RTC_SPILL_WEIGHT=${EXP_RTC_SPILL_WEIGHT:-1}
 export EXP_RTC_SEND_MORE=${EXP_RTC_SEND_MORE:-Y}
+export EXP_TCP_LOB=${EXP_TCP_LOB:-4194304}
 export EXP_SYSCTL=${EXP_SYSCTL:-"net.core.rmem_max=268435456;net.core.wmem_max=268435456;net.ipv4.tcp_rmem=4096 1048576 268435456;net.ipv4.tcp_wmem=4096 1048576 268435456"}
 case "${1:-}" in
 apply|audit) exec ./settled.sh "$@" ;;
@@ -123,7 +129,7 @@ run)
 	env -u EXP_NFSD_THREADS -u EXP_SYSCTL -u EXP_POOL_MODE -u EXP_SVCAUTH_BORROW \
 		-u EXP_EXPORT_BORROW_SLOTS -u EXP_FH_BORROW_SLOTS \
 		-u EXP_RTC_SPILL_CPUS -u EXP_RTC_SPILL_WEIGHT -u EXP_RTC_SEND_MORE \
-		./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
+		-u EXP_TCP_LOB ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
 	echo "settled again: $(tail -1 /var/tmp/zc-run-logs/settled-iops-after.txt)"
 	exit $rc ;;
 *) echo "settled-iops.sh apply|audit|run <command ...>"; exit 1 ;;
