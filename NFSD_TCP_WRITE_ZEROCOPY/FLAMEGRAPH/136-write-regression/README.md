@@ -523,3 +523,27 @@ switch's `xps_queuelen` (counted only under N), as before
 is queued where the data arrives.  `ab-policy.sh`: N then Y, each with
 the WRITE pass, the READ pass and 4 KiB IOPS at iodepth 96 (t2-r1112
 to r1117).
+
+### The policy parameter (21:32 to 21:57): the per-CPU choice never helps
+
+`2879915a28581` (`e42020cc5e247` before its `Fixes:` tag), the client
+on the tip's stack, sunrpc `ADFE789DC77EE680D7DF331`:
+
+| | N: balanced round-robin | Y: per-CPU choice |
+|---|---|---|
+| WRITE pass | **77.75 GB/s**, p99 83 / 83 ms (t2-r1112) | 74.69, p99 154 / 156 (t2-r1115) |
+| a transport at t9 | 91 / 99 / 110 (3182) | 37 / 133 / 310 (4733) |
+| READ pass | **82.09 GB/s** (t2-r1113) | 79.27 (t2-r1116) |
+| 4 KiB IOPS, iodepth 96 | 3.52 M, p99 3.36 / 3.29 ms (t2-r1114) | 3.53 M, p99 3.59 / 4.08 (t2-r1117) |
+| CPU a READ, server / client | 16.00 / 11.73 us | 15.41 / 11.29 us |
+
+All PASS, no new kernel warning; the client on build 541's stack and
+the settled setting after.  N writes 3.1 GB/s more with half the tail,
+reads 2.8 more, and gives the same IOPS; Y saves about half a
+microsecond of CPU a READ on each host and buys nothing with it at
+iodepth 96.  At N nothing of `5555163d661a0` or of the two homing
+commits on it (`a37330054f3ca`, `994e5b01c627c`) runs on the I/O path:
+no CPU map is built, no transport has a home CPU, and the homing only
+keeps its books when a transport is created.  Mike's to decide how
+they go: dropped from the history, one commit at the tip, or at the
+next regroup with N the default until then.
