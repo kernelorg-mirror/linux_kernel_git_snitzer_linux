@@ -1579,6 +1579,63 @@ static const struct cpumask *svc_rtc_allowed(void)
 }
 
 /*
+ * svc_rtc_spill_cpus and svc_rtc_spill_weight: CPUs the balance may place
+ * a connection's work item on besides svc_rtc_cpus, as a last resort.
+ * Each counts as already holding svc_rtc_spill_weight work items, so every
+ * CPU of svc_rtc_cpus fills to that many before a spill CPU takes its
+ * first.  They are for the CPUs that take the network's interrupts: those
+ * have time to spare under small calls, but run their softirqs first.  A
+ * receive on a spill CPU does not take it out of the placement.  Used only
+ * with svc_rtc_balance and a non-empty svc_rtc_cpus; empty, the default,
+ * changes nothing.  Written as svc_rtc_cpus is, read the same way.
+ */
+static struct cpumask svc_rtc_spill_mask;
+static bool svc_rtc_spill_set __read_mostly;
+static unsigned int svc_rtc_spill_weight __read_mostly = 2;
+
+static int svc_rtc_spill_cpus_param_set(const char *val,
+					const struct kernel_param *kp)
+{
+	cpumask_var_t mask;
+	int ret;
+
+	if (!zalloc_cpumask_var(&mask, GFP_KERNEL))
+		return -ENOMEM;
+	ret = cpulist_parse(strim((char *)val), mask);
+	if (!ret) {
+		cpumask_copy(&svc_rtc_spill_mask, mask);
+		WRITE_ONCE(svc_rtc_spill_set, !cpumask_empty(mask));
+	}
+	free_cpumask_var(mask);
+	return ret;
+}
+
+static int svc_rtc_spill_cpus_param_get(char *buffer,
+					const struct kernel_param *kp)
+{
+	if (!READ_ONCE(svc_rtc_spill_set))
+		return sysfs_emit(buffer, "\n");
+	return sysfs_emit(buffer, "%*pbl\n",
+			  cpumask_pr_args(&svc_rtc_spill_mask));
+}
+
+static const struct kernel_param_ops svc_rtc_spill_cpus_ops = {
+	.set = svc_rtc_spill_cpus_param_set,
+	.get = svc_rtc_spill_cpus_param_get,
+};
+module_param_cb(svc_rtc_spill_cpus, &svc_rtc_spill_cpus_ops, NULL, 0644);
+MODULE_PARM_DESC(svc_rtc_spill_cpus,
+		 "CPUs (a list) the balance places run-to-completion work items on after svc_rtc_cpus, as a last resort (empty: none)");
+module_param(svc_rtc_spill_weight, uint, 0644);
+MODULE_PARM_DESC(svc_rtc_spill_weight,
+		 "Work items each spill CPU counts as holding when the balance places one (default 2)");
+
+static const struct cpumask *svc_rtc_spill(void)
+{
+	return READ_ONCE(svc_rtc_spill_set) ? &svc_rtc_spill_mask : NULL;
+}
+
+/*
  * svc_rtc_balance: place a connection on the eligible CPU that holds the
  * fewest connections' work items, rather than on one chosen by a hash of
  * the connection.  A hash puts two or three busy connections on one CPU
@@ -1735,14 +1792,17 @@ static void svc_rtc_set_cpu(struct svc_rtc_conn *conn, int cpu)
 
 /*
  * The eligible CPU of @node holding the fewest work items, the scan
- * starting at a hash of @key so that ties spread.  -1 when none is
- * eligible.  Placements that race may pick the same CPU; the count is
- * raised only by svc_rtc_set_cpu(), so the next one sees it.
+ * starting at a hash of @key so that ties spread.  A CPU of @spill not in
+ * @allowed is eligible too, counting @weight more than it holds.  -1
+ * when none is eligible.  Placements that race may pick the same CPU; the
+ * count is raised only by svc_rtc_set_cpu(), so the next one sees it.
  */
 static int svc_rtc_pick_least(const void *key, const struct cpumask *node,
 			      const struct cpumask *rxcpus,
 			      const struct cpumask *online,
-			      const struct cpumask *allowed)
+			      const struct cpumask *allowed,
+			      const struct cpumask *spill,
+			      unsigned int weight)
 {
 	unsigned int n = cpumask_weight(node), start, i;
 	int cpu, best = -1, least = INT_MAX;
@@ -1761,14 +1821,18 @@ static int svc_rtc_pick_least(const void *key, const struct cpumask *node,
 
 		if (cpu >= nr_cpu_ids)
 			cpu = cpumask_first(node);
-		if (svc_rtc_cpu_eligible(cpu, rxcpus, online, allowed)) {
+		placed = -1;
+		if (svc_rtc_cpu_eligible(cpu, rxcpus, online, allowed))
 			placed = atomic_read(per_cpu_ptr(&svc_rtc_placed, cpu));
-			if (placed < least) {
-				least = placed;
-				best = cpu;
-				if (!placed)
-					break;
-			}
+		else if (spill && cpumask_test_cpu(cpu, spill) &&
+			 svc_rtc_cpu_eligible(cpu, rxcpus, online, NULL))
+			placed = atomic_read(per_cpu_ptr(&svc_rtc_placed, cpu)) +
+				 weight;
+		if (placed >= 0 && placed < least) {
+			least = placed;
+			best = cpu;
+			if (!placed)
+				break;
 		}
 		cpu = cpumask_next(cpu, node);
 	}
@@ -1807,10 +1871,14 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 				   bool softirq)
 {
 	const struct cpumask *allowed = svc_rtc_allowed();
+	const struct cpumask *spill = NULL;
 	int cpu = READ_ONCE(conn->cpu);
 
 	if (!softirq)
 		return cpu;
+	/* the spill CPUs stand only beside svc_rtc_cpus, with the balance */
+	if (allowed && READ_ONCE(svc_rtc_balance))
+		spill = svc_rtc_spill();
 	/*
 	 * A CPU named in svc_rtc_cpus is one the work items are meant to run
 	 * on.  A receive there was steered to it (RPS or RFS hands a flow's
@@ -1818,11 +1886,13 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 	 * not marked: marking it would take it out of the placement for good.
 	 */
 	if (!cpumask_test_cpu(rx_cpu, serv->sv_rtc_rxcpus) &&
-	    !(allowed && cpumask_test_cpu(rx_cpu, allowed)))
+	    !(allowed && cpumask_test_cpu(rx_cpu, allowed)) &&
+	    !(spill && cpumask_test_cpu(rx_cpu, spill)))
 		cpumask_set_cpu(rx_cpu, serv->sv_rtc_rxcpus);
 	if (cpu >= 0 && cpu_online(cpu) &&
 	    (cpu == rx_cpu || !cpumask_test_cpu(cpu, serv->sv_rtc_rxcpus)) &&
-	    (!allowed || cpumask_test_cpu(cpu, allowed)))
+	    (!allowed || cpumask_test_cpu(cpu, allowed) ||
+	     (spill && cpumask_test_cpu(cpu, spill))))
 		return cpu;
 	cpu = -1;
 	if (READ_ONCE(svc_rtc_balance)) {
@@ -1831,11 +1901,12 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 		if (allowed)
 			cpu = svc_rtc_pick_least(conn->xprt, node,
 						 serv->sv_rtc_rxcpus,
-						 cpu_online_mask, allowed);
+						 cpu_online_mask, allowed, spill,
+						 READ_ONCE(svc_rtc_spill_weight));
 		if (cpu < 0)
 			cpu = svc_rtc_pick_least(conn->xprt, node,
 						 serv->sv_rtc_rxcpus,
-						 cpu_online_mask, NULL);
+						 cpu_online_mask, NULL, NULL, 0);
 		if (cpu < 0)
 			cpu = rx_cpu;
 	} else {
