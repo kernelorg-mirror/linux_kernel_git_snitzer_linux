@@ -603,3 +603,13 @@ them, `depmod -a`); `depmod -a` run, and `cswap131.sh stock` loads them
 load on this sunrpc ("disagrees about version of symbol"): nfsd is not
 in the build, and the client's `nfs-server` was not running before.
 The WRITE and READ marks are 77.6 since (`6db25b6d56984`).
+
+The passes with the client on `updates/` at the 77.6 marks (Mike: "run
+a WRITE and READ pass with the client on updates/"):
+
+| Run | Pass | Result |
+|---|---|---|
+| t2-r1122 | WRITE | **77.87 GB/s PASS**, no drive stepped down, no new kernel warning |
+| t2-r1123 | READ | **82.38 GB/s PASS** (41.31 / 41.06 a port, every drive 10.2 to 10.4 GB/s), no new kernel warning |
+
+The settled setting after.
