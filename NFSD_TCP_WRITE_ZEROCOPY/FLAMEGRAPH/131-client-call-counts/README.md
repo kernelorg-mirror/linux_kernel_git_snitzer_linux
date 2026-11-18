@@ -44,3 +44,28 @@ nfs_acl, grace, nfs_localio, nfs_dio and nfsidmap.  `auth_rpcgss` is
 not loaded (the stock one, loaded on demand when gssproxy started,
 refuses the new sunrpc); the runs mount NFSv3 with AUTH_SYS.  The
 client's NFS server stays stopped, as it was.
+
+## Result (18 November, 10:53 to 11:07)
+
+| Run | Client's counts | M IOPS (ports) | p99 a; b (ms) | Server busy, us a READ | Client busy (busiest) | Client us a READ | Client CPUs min / median / max |
+|---|---|---|---|---|---|---|---|
+| t2-r1054 | Y | 3.08 (1.47 / 1.61) | 2.44; 2.44 | 76%, 15.79 | 77% (89%) | 12.00 | 68 / 77 / 89 |
+| t2-r1055 | N | 3.13 (1.53 / 1.60) | 2.44; 2.44 | 78%, 15.95 | 76% (81%) | 11.65 | 71 / 77 / 81 |
+| t2-r1056 | Y | 3.07 (1.51 / 1.56) | 2.41; 2.41 | 76%, 15.84 | 76% (83%) | 11.88 | 69 / 77 / 83 |
+| t2-r1057 | N | 3.11 (1.60 / 1.51) | 2.34; 2.44 | 77%, 15.85 | 75% (81%) | 11.58 | 66 / 75 / 81 |
+
+Counting: 3.075 M and 11.94 us of the client's CPU a READ; not
+counting: 3.12 M and 11.615 us.  **-0.33 us a READ on the client
+(-2.7%), +1.5% IOPS**, both pairs the same way; round 130's profile put
+0.31 us on the two increments.  The server's CPU a READ the same.  No
+new kernel warning.
+
+The client is back on build 541's stack (`cswap131.sh stock`: sunrpc
+`225361815EB170B866C5033`, 16 exports).  Its nfsd does not load on
+build 541 at all (it depends on the kunit module, which the client has
+not got: `nfs-server` failed at boot on 17 November), so the client's
+NFS server was down before the round and still is.
+
+The DROP switch is dropped from the branch (the tip before is kept as
+`kernel-7.3/canary.pre-drop-call-counts-ab`).  Step 2, the per-CPU
+counters in sunrpc and nfs, is Mike's to call.
