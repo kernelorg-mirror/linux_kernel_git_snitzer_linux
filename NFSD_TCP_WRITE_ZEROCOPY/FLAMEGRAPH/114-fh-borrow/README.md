@@ -42,3 +42,14 @@ W=1, no warning; the test nfsd with the suite in
 2. `settled.sh apply`; the WRITE pass `write-check.sh 973` and the READ
    pass `read-check.sh 974` (the change is on the path both take).
 3. The A/B: `ab-fh.sh 975:16 976:0 977:16 978:0 979:16 980:0`.
+
+## The suite (18 November, 04:35)
+
+`kunit-export.sh /var/tmp/svcstack-541-fhb`: first 41 of 42; `not ok 38
+ebt_fh_drain` read the dentry's count after the drain had dropped the
+last reference (a dead lockref, 0xffffff80): the case's mistake, fixed
+in `b4e35ad8e93fd` (it holds its own reference across the drain).
+Then **`sunrpc-nfsd-export-borrow` 42 of 42, no `WARNING:`, `BUG:` or
+`Oops`**; the stack's own nfsd back (`DFC417DB5E771ABF21E2D4D`,
+`fh_borrow_slots` 16), the settled setting.  Next: the passes and the
+A/B, steps 2 and 3.
