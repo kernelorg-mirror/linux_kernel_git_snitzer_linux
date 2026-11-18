@@ -358,3 +358,39 @@ defaults, not round 109's 64 and 12, which it had only on its command
 lines; the defaults are 64 and 12 since then, and `nfs4k.sh` takes them
 when a run gives only its number.  Export borrow over t2-r918: 28.0 M
 hits, 26.6 M fills (51% hits): one slot a thread against eight exports.
+
+## Rounds 110 to 112 (18 November): 2.54 M IOPS, the server the limit
+
+Both hosts on build 541, the server on the tip's stack, `settled-iops.sh`
+(iodepth 64, nconnect 12, 48 fio jobs, 96 connections):
+
+| Round | Change | M IOPS | What it showed |
+|---|---|---|---|
+| 110 | the export borrow, several entries a thread (`export_borrow_slots` 16) | 2.47 to 2.48 | hits from 24 to 61% to 99.98%; 2% server CPU, no rate |
+| 111 | the AUTH_SYS borrow (`svcauth_borrow` Y) | **2.54 to 2.55**, against 2.47 to 2.49 off | +2.4%, the server's busiest CPU from 100% to 92%; both borrows held by `settled-iops.sh` since |
+| 112 | the client's scope at `cpu` (`CLI_SCOPE`) | 2.54 to 2.55, against cache_shard's 2.52 to 2.54 | the same rate, 3 points less client CPU, p99 0.1 to 0.3 ms longer; `settled-iops.sh` holds `cpu` since (Mike, 18 November) |
+
+Round 112's profile (t2-r965) found the client's spin locks (about 10%
+of its samples) on six unbound workqueue pools: nfsiod runs the release
+of every finished READ (`rpc_async_release`, one item a READ), and
+shares its pools with xprtiod.  At `cpu` that lock is gone, and in every
+run of the A/B the server's busiest work CPU reads 95 to 98%: the server
+is the limit now.
+
+### TODO
+
+1. **The server's per-READ cost**, the limit now: profile the server at
+   2.54 M with both borrows (round 111's t2-r963 is the last: softirq,
+   the reply's send, `nfsd_file_lookup_cached` 7.8%, `fh_verify` 6.7%).
+2. **nfsiod on a per-CPU workqueue** (`WQ_PERCPU`, as build 541 made
+   rpciod) on the client (Mike, 18 November: "add IOPS.md todo to
+   implement nfsiod with percpu wq"): each READ's release queued on the
+   CPU that ran its task, on that CPU's own pool, strictly, where scope
+   `cpu` only prefers it.  Expected, while the server is the limit: the
+   same rate for less client CPU, as round 112's A/B.  `nfsiod` is made
+   in `fs/nfs/inode.c` (`alloc_workqueue("nfsiod", WQ_MEM_RECLAIM |
+   WQ_UNBOUND, 0)`); with it per-CPU, `CLI_SCOPE` would only steer
+   xprtiod.  A client-only change: it takes no server path, so it owes
+   no WRITE or READ pass, but its README says so.
+3. **The WRITE pass back to 77.6** once the client's WRITE path on
+   build 541 is fixed (`WRITE.md`, TODO 2).
