@@ -397,6 +397,16 @@ RTC_BALANCE=N
 [ $HOST = tardis2 ] && RTC_BALANCE=Y
 RTC_BALANCE_SETTLED=$RTC_BALANCE
 [ -n "${EXP_RTC_BALANCE:-}" ] && RTC_BALANCE=$EXP_RTC_BALANCE
+# sunrpc's svcauth_borrow (the AUTH_SYS borrow, d8161366f11b2 and its
+# fixes; FLAMEGRAPH round 111: 2.4% more 4 KiB READ IOPS at Y) and nfsd's
+# export_borrow_slots (the export borrow's entries a thread, bbcc6e8d1389d;
+# round 110) are not held at rest: their defaults, Y and 16, run there
+# unaudited.  EXP_SVCAUTH_BORROW (Y or N) and EXP_EXPORT_BORROW_SLOTS (0
+# to 64) hold a run (and apply) to them; settled-iops.sh holds Y and 16
+# (Mike, 18 November: "add both to settled-iops.sh").  A sunrpc or nfsd
+# without them is BAD when they are held.
+SVCAUTH_BORROW=${EXP_SVCAUTH_BORROW:-}
+EXPORT_BORROW_SLOTS=${EXP_EXPORT_BORROW_SLOTS:-}
 # sunrpc's svc_rtc_send_max, the bytes a connection's send queue may hold
 # before its rtc work item takes another call ("SUNRPC: Bound the replies
 # a run-to-completion connection holds", f379dad69c793).  1.5 MiB on
@@ -668,6 +678,8 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 	[ -n "${EXP_RTC_READ:-}" ] && [ "$EXP_RTC_READ" != "$RTC_READ_SETTLED" ] && OFF="$OFF rtc_read=$EXP_RTC_READ"
 	[ "$RTC_CPUS" != "$RTC_CPUS_SETTLED" ] && OFF="$OFF svc_rtc_cpus=${RTC_CPUS:-none}"
 	[ "$RTC_BALANCE" != "$RTC_BALANCE_SETTLED" ] && OFF="$OFF svc_rtc_balance=$RTC_BALANCE"
+	[ -n "$SVCAUTH_BORROW" ] && OFF="$OFF svcauth_borrow=$SVCAUTH_BORROW"
+	[ -n "$EXPORT_BORROW_SLOTS" ] && OFF="$OFF export_borrow_slots=$EXPORT_BORROW_SLOTS"
 	[ "$RTC_SEND_MAX" != "$RTC_SEND_MAX_SETTLED" ] && OFF="$OFF svc_rtc_send_max=$RTC_SEND_MAX"
 	[ "$RFS" != "$RFS_SETTLED" ] && OFF="$OFF rfs=$RFS"
 	[ -n "$RPS_CPUS" ] && OFF="$OFF rps=$RPS_CPUS"
@@ -719,6 +731,20 @@ audit_nfsd() {
 		want "sunrpc svc_rtc_balance" "$(cat $SUNRPC/svc_rtc_balance)" "$RTC_BALANCE"
 	elif [ "$RTC_BALANCE" = Y ]; then
 		bad "sunrpc svc_rtc_balance" "not in this sunrpc" "a sunrpc with fe25e474fa3de"
+	fi
+	if [ -n "$SVCAUTH_BORROW" ]; then
+		if [ -e $SUNRPC/svcauth_borrow ]; then
+			want "sunrpc svcauth_borrow" "$(cat $SUNRPC/svcauth_borrow)" "$SVCAUTH_BORROW"
+		else
+			bad "sunrpc svcauth_borrow" "not in this sunrpc" "a sunrpc with d8161366f11b2"
+		fi
+	fi
+	if [ -n "$EXPORT_BORROW_SLOTS" ]; then
+		if [ -e /sys/module/nfsd/parameters/export_borrow_slots ]; then
+			want "nfsd export_borrow_slots" "$(cat /sys/module/nfsd/parameters/export_borrow_slots)" "$EXPORT_BORROW_SLOTS"
+		else
+			bad "nfsd export_borrow_slots" "not in this nfsd" "an nfsd with bbcc6e8d1389d"
+		fi
 	fi
 	if [ -e $SUNRPC/svc_rtc_send_max ]; then
 		want "sunrpc svc_rtc_send_max" "$(cat $SUNRPC/svc_rtc_send_max)" "$RTC_SEND_MAX"
@@ -1134,6 +1160,9 @@ apply() {	# the sizes, the CPU layout, the resting module settings, and the audi
 		done
 		[ -w $SUNRPC/svc_rtc_cpus ] && [ "$(cat $SUNRPC/svc_rtc_cpus)" != "$RTC_CPUS" ] && echo "${RTC_CPUS:-}" > $SUNRPC/svc_rtc_cpus
 		[ -w $SUNRPC/svc_rtc_balance ] && [ "$(cat $SUNRPC/svc_rtc_balance)" != "$RTC_BALANCE" ] && echo $RTC_BALANCE > $SUNRPC/svc_rtc_balance
+		[ -n "$SVCAUTH_BORROW" ] && [ -w $SUNRPC/svcauth_borrow ] && [ "$(cat $SUNRPC/svcauth_borrow)" != "$SVCAUTH_BORROW" ] && echo $SVCAUTH_BORROW > $SUNRPC/svcauth_borrow
+		_ebs=/sys/module/nfsd/parameters/export_borrow_slots
+		[ -n "$EXPORT_BORROW_SLOTS" ] && [ -w $_ebs ] && [ "$(cat $_ebs)" != "$EXPORT_BORROW_SLOTS" ] && echo $EXPORT_BORROW_SLOTS > $_ebs
 		[ -w $SUNRPC/svc_rtc_send_max ] && [ "$(cat $SUNRPC/svc_rtc_send_max)" != "$RTC_SEND_MAX" ] && echo $RTC_SEND_MAX > $SUNRPC/svc_rtc_send_max
 		for k in "${!NFSD_DBG_OPT[@]}"; do
 			[ -e /sys/kernel/debug/nfsd/$k ] || continue

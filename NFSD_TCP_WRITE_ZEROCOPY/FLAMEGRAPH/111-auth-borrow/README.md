@@ -357,3 +357,13 @@ nfsd `DC178C9D921DD1CDFF947D7`), kdump armed.
 This boot carries the first run's writes into freed test nets, above:
 nothing has faulted, but a fault later on this boot is to be read with
 them in mind, and a reboot clears them.
+
+## Both borrows held for IOPS (18 November)
+
+Mike: "add both to settled-iops.sh".  `settled.sh` gains
+`EXP_SVCAUTH_BORROW` and `EXP_EXPORT_BORROW_SLOTS`, which hold nothing
+unless set (the settled setting is unchanged: at rest the defaults, Y
+and 16, run unaudited); `settled-iops.sh` sets them to Y and 16, so its
+apply, audit and run hold both, list them on the "as the run asks" line,
+and refuse a run with either off (checked: `EXP_SVCAUTH_BORROW=N` audits
+`BAD sunrpc svcauth_borrow Y (want N)`).
