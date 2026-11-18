@@ -547,3 +547,22 @@ no CPU map is built, no transport has a home CPU, and the homing only
 keeps its books when a transport is created.  Mike's to decide how
 they go: dropped from the history, one commit at the tip, or at the
 next regroup with N the default until then.
+
+### The per-CPU choice reverted (plan)
+
+Mike: "revert each from the tip in commit order, do so in a way that
+lends itself to git rebase dropping the reverts and the original commit
+at next regroup's rebase".  Six reverts, newest first, each with git's
+own "This reverts commit <full SHA>." to pair it with what it reverts:
+`31f6d1abad006` (the policy parameter, `2879915a28581`; its subject cut
+with "..." to 72 columns), `1f9c3cb5ed1c4` (the DROP switch,
+`a60960b6a6f99`), `f920de8058d5a` (`994e5b01c627c`), `f8c8784ce8381`
+(`6ddeaa4d160e6`, "xprtrdma: interrupt a transport's completions on its
+home core", which calls the homing's `rpc_xprt_numa_comp_vector()`: the
+first build without it failed, and it was put back in its place),
+`e47f942327151` (`a37330054f3ca`) and `7313a2551b565`
+(`5555163d661a0`).  No conflicts; `xprtmultipath.c`,
+`xprtmultipath.h` and `xprt.h` are those before `5555163d661a0` byte
+for byte.  The tips before are `kernel-7.3/canary.pre-percpu-revert`
+and `.pre-rdma-revert`.  `rev136.sh`: the WRITE pass,
+the READ pass and IOPS on it (t2-r1118 to r1120).
