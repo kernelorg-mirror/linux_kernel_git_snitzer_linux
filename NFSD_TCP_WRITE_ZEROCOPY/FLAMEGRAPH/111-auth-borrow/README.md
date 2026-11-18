@@ -251,6 +251,15 @@ borrow suite has run.  On build 541 at the tip's stack
    `01ad6b07da122`), loaded with insmod through `step.sh`; it runs on
    its own test net and caches.  Results from
    `/sys/kernel/debug/kunit/svcauth_unix_borrow/results`, then rmmod.
+   The first insmod (02:05) printed `kunit: disabled`: `kunit` came in
+   with nfsd at its default `enable=0`, not writable at runtime
+   (`TESTING.md`).  So `kunit-auth.sh` runs it: nfs units stopped, nfsd
+   unloaded, `kunit` reloaded `enable=1 filter_glob=svcauth_unix_borrow`
+   (the stack's nfsd links in `nfsd_rtc_kunit`, which must not run),
+   the suite loaded and unloaded, `kunit` unloaded before nfsd loads
+   again, the stack put back with `swap-sunrpc.sh` and `settled.sh
+   apply`; each step through `step.sh`, logs in
+   `/var/tmp/zc-run-logs/kunit-auth-541/`.
 2. `nfsd_export_borrow` (the cases of `5420d7f0a7dc7` and
    `c3493f011b68e`): nfsd built from the same tree with
    `CONFIG_NFSD_EXPORT_BORROW_KUNIT_TEST=y`, swapped in with
