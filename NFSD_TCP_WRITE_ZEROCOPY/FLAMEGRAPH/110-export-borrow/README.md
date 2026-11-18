@@ -166,3 +166,58 @@ are run on this build, which carries it.  The plan, in order:
     ./settled.sh apply
     ./write-check.sh 931; ./read-check.sh 932
     ../FLAMEGRAPH/110-export-borrow/prof-borrow.sh 933 16
+
+### The passes and the profile on it (18 November, 00:13 to 00:28)
+
+Server build 541 with `/var/tmp/svcstack-541-mru/stack` (nfsd
+`528EBC791C7D3FAEB133919`, `export_borrow_slots` 16), client build
+541.  The borrow counters' change in each, from
+`/var/tmp/zc-run-logs/541/mru.log`:
+
+| Run | | GB/s or M IOPS | Result | borrow hits | at the MRU entry |
+|---|---|---|---|---|---|
+| t2-r931 | WRITE pass | 74.55 | RERUN | 5.09 M | 0.66 M (13%) |
+| t2-r932 | READ pass (io_uring, rsize 256 KiB) | 79.22 | **PASS** | 18.42 M | 5.52 M (30%) |
+| t2-r933 | IOPS profile at 16 | 2.49 | | 66.49 M | 40.43 M (61%) |
+| t2-r934 | WRITE pass again | 74.98 | RERUN | | |
+
+No drive stepped down and no new kernel warning in any (with the wider
+filter of `c30fb8f5fdaab`); no evictions, no bad returns.
+
+**The READ pass passes**: 79.22 GB/s, the drives 9.8 to 10.0 GB/s each
+at 100% busy, against 79.65 on the tip's stack before the borrow fix
+(t2-r916).  Against the frame: 76% of what the drives read with local
+fio (104.58 GB/s) and 81% of what the ports send with iperf3 `-Z`
+(98.31); the pass measures no memory or Send-Q.
+
+**The WRITE pass is below 75.0 twice, a regression by the rule**
+(AGENTS.md: not kept unless Mike decides).  74.55 and 74.98, the drives
+9.2 to 9.4 GB/s each at 95 to 96% busy, ring drops 43 to 85, against:
+
+| Server stack (client build 541) | WRITE passes |
+|---|---|
+| build 541's own | 74.85, 75.16 (t2-r905, r907, round 109) |
+| the tip, one-slot borrow | 74.91, 75.25 (t2-r915, r917) |
+| the tip, 16 entries and MRU-first | 74.55, 74.98 (t2-r931, r934) |
+
+About 0.3 GB/s lower on the mean, inside the spread of the others; two
+runs do not tell a cost of the borrow from the spread.  To tell: WRITE
+passes on this build at `export_borrow_slots` 16 and 0 in turns, the
+same modules and boot.  Mike's decision.
+
+**What a hit costs now** (t2-r933 against t2-r929, share of all server
+samples):
+
+| | t2-r929 (scan from the first) | t2-r933 (MRU first, inline match) |
+|---|---|---|
+| `nfsd_exp_borrow`, self | 0.48% | 0.69% (the match inlined in it) |
+| `nfsd_exp_ent_match`, self | 0.40% | inlined |
+| a hit in all | 0.88% | **0.69%** |
+| `fh_verify`, with children | 6.45% | 6.40% |
+| swapper (idle) | 18.34% | 18.61% |
+
+A hit costs about a fifth less.  61% of the IOPS run's hits were the
+entry used last, 30% of the READ pass's, 13% of the WRITE pass's: the
+WRITE pass's 16 jobs a port at iodepth 16 spread more exports over each
+thread.  IOPS are unchanged (2.49 M against 2.47 to 2.48), as the A/B
+said: the limit is not in the lookup.
