@@ -32,3 +32,15 @@ Built on the client from `09e0762eac9aa`: 26 modules, no warning but
 the 10 compiler and pahole version notes; sunrpc srcversion
 `DF01CCB1C31213C2F060D0C`, with the switch.  The KUnit modules it built
 are taken out of the module root.
+
+**The swap.**  `cswap.sh` as it was loads nfsd too, and the tree's
+nfsd links in the export-borrow KUnit suite, which wants the kunit
+module the client does not load: it fell back to build 541's stack
+(sunrpc `225361815EB170B866C5033`, 16 exports, nothing lost).
+`cswap131.sh` takes the modules to load from `NFSM`; with
+`NFSM="sunrpc nfsv3 nfsv4"` the client runs the tree's sunrpc
+`DF01CCB1C31213C2F060D0C` (switch Y), nfs, nfsv3, nfsv4, lockd,
+nfs_acl, grace, nfs_localio, nfs_dio and nfsidmap.  `auth_rpcgss` is
+not loaded (the stock one, loaded on demand when gssproxy started,
+refuses the new sunrpc); the runs mount NFSv3 with AUTH_SYS.  The
+client's NFS server stays stopped, as it was.
