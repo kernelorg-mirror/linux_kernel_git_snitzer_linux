@@ -2592,13 +2592,14 @@ static int nfsd_nl_server_stats_scalars(struct sk_buff *skb,
 			NFSD_A_SERVER_STATS_PAD))
 		return -EMSGSIZE;
 
-	if (nla_put_u32(skb, NFSD_A_SERVER_STATS_NETCNT, statp->netcnt) ||
+	if (nla_put_u32(skb, NFSD_A_SERVER_STATS_NETCNT, svc_stat_netcnt(statp)) ||
 	    nla_put_u32(skb, NFSD_A_SERVER_STATS_NETUDPCNT, statp->netudpcnt) ||
-	    nla_put_u32(skb, NFSD_A_SERVER_STATS_NETTCPCNT, statp->nettcpcnt) ||
+	    nla_put_u32(skb, NFSD_A_SERVER_STATS_NETTCPCNT,
+			svc_stat_nettcpcnt(statp)) ||
 	    nla_put_u32(skb, NFSD_A_SERVER_STATS_NETTCPCONN, statp->nettcpconn))
 		return -EMSGSIZE;
 
-	if (nla_put_u32(skb, NFSD_A_SERVER_STATS_RPCCNT, statp->rpccnt) ||
+	if (nla_put_u32(skb, NFSD_A_SERVER_STATS_RPCCNT, svc_stat_rpccnt(statp)) ||
 	    nla_put_u32(skb, NFSD_A_SERVER_STATS_RPCBADFMT, statp->rpcbadfmt) ||
 	    nla_put_u32(skb, NFSD_A_SERVER_STATS_RPCBADAUTH, statp->rpcbadauth) ||
 	    nla_put_u32(skb, NFSD_A_SERVER_STATS_RPCBADCLNT, statp->rpcbadclnt))

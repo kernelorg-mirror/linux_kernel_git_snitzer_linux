@@ -178,6 +178,23 @@ static const struct proc_ops rpc_proc_ops = {
 	.proc_release	= single_release,
 };
 
+#define SVC_STAT_SUM(name)						\
+unsigned int svc_stat_##name(const struct svc_stat *statp)		\
+{									\
+	unsigned int n = data_race(statp->name);			\
+	int cpu;							\
+									\
+	if (statp->pcpu)						\
+		for_each_possible_cpu(cpu)				\
+			n += per_cpu_ptr(statp->pcpu, cpu)->name;	\
+	return n;							\
+}									\
+EXPORT_SYMBOL_GPL(svc_stat_##name)
+
+SVC_STAT_SUM(netcnt);
+SVC_STAT_SUM(nettcpcnt);
+SVC_STAT_SUM(rpccnt);
+
 /*
  * Get RPC server stats
  */
@@ -190,13 +207,13 @@ void svc_seq_show(struct seq_file *seq, const struct svc_stat *statp)
 
 	seq_printf(seq,
 		"net %u %u %u %u\n",
-			statp->netcnt,
+			svc_stat_netcnt(statp),
 			statp->netudpcnt,
-			statp->nettcpcnt,
+			svc_stat_nettcpcnt(statp),
 			statp->nettcpconn);
 	seq_printf(seq,
 		"rpc %u %u %u %u %u\n",
-			statp->rpccnt,
+			svc_stat_rpccnt(statp),
 			statp->rpcbadfmt+statp->rpcbadauth+statp->rpcbadclnt,
 			statp->rpcbadfmt,
 			statp->rpcbadauth,

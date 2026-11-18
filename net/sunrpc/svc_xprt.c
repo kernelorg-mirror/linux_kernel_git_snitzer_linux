@@ -3042,7 +3042,7 @@ static int svc_xprt_recv_call(struct svc_rqst *rqstp, struct svc_xprt *xprt)
 	rqstp->rq_chandle.defer = svc_defer;
 
 	if (serv->sv_stats)
-		serv->sv_stats->netcnt++;
+		svc_stat_inc(serv->sv_stats, netcnt);
 	percpu_counter_inc(&rqstp->rq_pool->sp_messages_arrived);
 	rqstp->rq_stime = ktime_get();
 	return len;

@@ -57,12 +57,38 @@ struct svc_stat {
 
 	/* Per-version per-procedure call counts (per-cpu, per-netns) */
 	unsigned long __percpu	**vs_count;
+	/*
+	 * The counts every call raises, per CPU when allocated with
+	 * vs_count, so that the CPUs do not pass this struct's line between
+	 * them: read them with svc_stat_netcnt() and the like.
+	 */
+	struct svc_stat_pcpu __percpu *pcpu;
 };
+
+struct svc_stat_pcpu {
+	unsigned int		netcnt;
+	unsigned int		nettcpcnt;
+	unsigned int		rpccnt;
+};
+
+/* Raise one of the counts in struct svc_stat_pcpu. */
+#define svc_stat_inc(statp, field) do {					\
+	struct svc_stat *__s = (statp);					\
+									\
+	if (__s->pcpu)							\
+		this_cpu_inc(__s->pcpu->field);				\
+	else								\
+		data_race(__s->field++);				\
+} while (0)
 
 int			rpc_stat_alloc_counts(struct rpc_stat *statp);
 void			rpc_stat_free_counts(struct rpc_stat *statp);
 unsigned int		rpc_stat_rpccnt(const struct rpc_stat *statp);
 unsigned int		rpc_stat_rpcauthrefresh(const struct rpc_stat *statp);
+
+unsigned int		svc_stat_netcnt(const struct svc_stat *statp);
+unsigned int		svc_stat_nettcpcnt(const struct svc_stat *statp);
+unsigned int		svc_stat_rpccnt(const struct svc_stat *statp);
 
 struct net;
 int			svc_stat_alloc_counts(struct svc_stat *statp);
