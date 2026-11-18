@@ -53,3 +53,12 @@ Then **`sunrpc-nfsd-export-borrow` 42 of 42, no `WARNING:`, `BUG:` or
 `Oops`**; the stack's own nfsd back (`DFC417DB5E771ABF21E2D4D`,
 `fh_borrow_slots` 16), the settled setting.  Next: the passes and the
 A/B, steps 2 and 3.
+
+## The table's size: 64 against 16 (plan)
+
+The passes' counters showed nearly every handle miss evicting a live
+entry at 16 (WRITE pass 54% hits, 2.31 M evictions; READ pass 92%, 1.56
+M), where the export side evicted none.  Mike, 18 November: "after the
+A/B, run fh_borrow_slots 64 against 16":
+
+    ../FLAMEGRAPH/114-fh-borrow/ab-fh.sh 981:64 982:16 983:64 984:16 985:64 986:16
