@@ -103,3 +103,8 @@ t2-r1016 (Mike: "yes, add a READ pass with send_more Y after the A/B"):
 t2-r1008's 79.47 at N.  Holding the partial tail may cost 1 MiB READs a
 little; send_more is Y only in `settled-iops.sh`, and the passes run at
 N.  `settled.sh apply` after it: the settled setting, send_more N.
+
+### The WRITE rerun
+
+t2-r1017 (send_more N): **PASS, 75.10 GB/s**, no drive stepped down, no
+new kernel warning.  Round 120's commit has both its passes.
