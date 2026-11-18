@@ -394,3 +394,25 @@ is the limit now.
    no WRITE or READ pass, but its README says so.
 3. **The WRITE pass back to 77.6** once the client's WRITE path on
    build 541 is fixed (`WRITE.md`, TODO 2).
+
+## MAYBE TODO
+
+Ideas Mike may take up later; none is planned.
+
+1. **Cached attributes in the file handle borrow** (Mike, 18 November:
+   "save 'implement the cached attributes in the fh borrow' as a MAYBE
+   TODO").  Every NFSv3 READ reply encodes post-op attributes, about
+   0.64 us of the server's 18.3 a READ (FLAMEGRAPH round 120,
+   t2-r1015): `vfs_getattr_nosec` and `xfs_vn_getattr` 30%,
+   `security_inode_getattr` (SELinux) 22%, the ID mapping 11%.  Round
+   121 took only what changes nothing a client sees (no direct I/O
+   alignment for a reply's attributes, no ID map lookup in the initial
+   user namespace), about 0.15 to 0.2 us.  The rest: keep a `kstat` in
+   each fh borrow entry, filled by the full `vfs_getattr()` when the
+   entry is filled (the LSM check and XFS's own fields included), and
+   on a hit reuse it while the inode's ctime and size are as they were,
+   taking atime fresh from the inode.  It would skip most of the 0.64 us
+   on the 99.8% of READs that hit.  What it costs: the LSM check runs at
+   the entry's fill, not on every reply, so a policy change takes effect
+   within `fh_borrow_ttl` (2 s); and each entry grows by a `kstat`
+   (about 150 bytes, 48 entries a thread).
