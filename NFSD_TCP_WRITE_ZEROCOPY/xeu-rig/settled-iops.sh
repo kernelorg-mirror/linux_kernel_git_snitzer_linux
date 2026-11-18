@@ -10,6 +10,16 @@
 #   net.ipv4.tcp_rmem, tcp_wmem "4096 1048576 268435456"   (his 2.4)
 #   sunrpc.pool_mode percpu   64 pools of 12 threads (settled: pernode,
 #                             one pool)                    EXP_POOL_MODE
+#   sunrpc.svcauth_borrow Y   the AUTH_SYS borrow: 2.54 to 2.55 M IOPS
+#                             against 2.47 to 2.49 at N (FLAMEGRAPH round
+#                             111, t2-r957 to r962)       EXP_SVCAUTH_BORROW
+#   nfsd.export_borrow_slots 16  the export borrow's entries a thread: 99.98%
+#                             hits on the eight exports (round 110)
+#                                                     EXP_EXPORT_BORROW_SLOTS
+#
+# The two borrows since 18 November (Mike: "add both to settled-iops.sh"):
+# their defaults, which settled.sh does not hold at rest; held here, a
+# run refuses to start with either off.
 #
 # pool_mode percpu since 17 November (Mike: "for settled-iops.sh settle
 # percpu"): what auto picks, as David's servers ran, 1.93 M IOPS median
@@ -72,6 +82,8 @@
 cd "$(dirname "$0")" || exit 1
 export EXP_NFSD_THREADS=${EXP_NFSD_THREADS:-768}
 export EXP_POOL_MODE=${EXP_POOL_MODE:-percpu}
+export EXP_SVCAUTH_BORROW=${EXP_SVCAUTH_BORROW:-Y}
+export EXP_EXPORT_BORROW_SLOTS=${EXP_EXPORT_BORROW_SLOTS:-16}
 export EXP_SYSCTL=${EXP_SYSCTL:-"net.core.rmem_max=268435456;net.core.wmem_max=268435456;net.ipv4.tcp_rmem=4096 1048576 268435456;net.ipv4.tcp_wmem=4096 1048576 268435456"}
 case "${1:-}" in
 apply|audit) exec ./settled.sh "$@" ;;
@@ -81,7 +93,8 @@ run)
 	export CLI_SCOPE=${CLI_SCOPE:-cache_shard}
 	export RW=${RW:-randread} BS=${BS:-4k} IOENGINE=${IOENGINE:-io_uring} FIXEDBUFS=${FIXEDBUFS-1}
 	"$@"; rc=$?
-	env -u EXP_NFSD_THREADS -u EXP_SYSCTL -u EXP_POOL_MODE ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
+	env -u EXP_NFSD_THREADS -u EXP_SYSCTL -u EXP_POOL_MODE -u EXP_SVCAUTH_BORROW \
+		-u EXP_EXPORT_BORROW_SLOTS ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
 	echo "settled again: $(tail -1 /var/tmp/zc-run-logs/settled-iops-after.txt)"
 	exit $rc ;;
 *) echo "settled-iops.sh apply|audit|run <command ...>"; exit 1 ;;
