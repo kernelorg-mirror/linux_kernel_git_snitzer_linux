@@ -779,7 +779,7 @@ static s64 export_stats_sum(struct export_stats *stats, int counter)
 	return stats ? percpu_counter_sum_positive(&stats->counter[counter]) : 0;
 }
 
-static void export_stats_shutdown(struct nfsd_net *nn)
+VISIBLE_IF_KUNIT void export_stats_shutdown(struct nfsd_net *nn)
 {
 	struct export_stats *stats;
 	struct hlist_node *tmp;
@@ -796,6 +796,16 @@ static void export_stats_shutdown(struct nfsd_net *nn)
 		export_stats_free(stats);
 	}
 }
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/* What nfsd_export_init() sets up of an nfsd_net's export statistics. */
+void export_stats_init(struct nfsd_net *nn)
+{
+	spin_lock_init(&nn->export_stats_lock);
+	hash_init(nn->export_stats_hash);
+	INIT_DELAYED_WORK(&nn->export_stats_reaper, export_stats_reap);
+}
+#endif
 
 static void svc_export_release(struct rcu_head *rcu_head)
 {

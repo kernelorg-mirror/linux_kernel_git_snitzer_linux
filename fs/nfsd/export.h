@@ -200,6 +200,8 @@ struct svc_expkey *svc_expkey_update(struct cache_detail *cd,
 struct svc_export *svc_export_lookup(struct svc_export *exp);
 struct svc_export *svc_export_update(struct svc_export *new,
 				     struct svc_export *old);
+void export_stats_init(struct nfsd_net *nn);
+void export_stats_shutdown(struct nfsd_net *nn);
 #endif
 
 #endif /* NFSD_EXPORT_H */
