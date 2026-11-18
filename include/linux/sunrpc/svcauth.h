@@ -173,6 +173,7 @@ extern struct auth_domain *auth_domain_find(char *name);
 extern void svcauth_unix_purge(struct net *net);
 extern void svcauth_unix_info_release(struct svc_xprt *xpt);
 extern enum svc_auth_status svcauth_unix_set_client(struct svc_rqst *rqstp);
+extern void svcauth_unix_borrow_free(struct svc_rqst *rqstp);
 
 extern int unix_gid_cache_create(struct net *net);
 extern void unix_gid_cache_destroy(struct net *net);

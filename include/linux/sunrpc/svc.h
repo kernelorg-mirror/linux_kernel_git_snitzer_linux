@@ -462,6 +462,10 @@ struct svc_rqst {
 	/* Catering to nfsd */
 	struct auth_domain *	rq_client;	/* RPC peer info */
 	struct auth_domain *	rq_gssclient;	/* "gss/"-style peer info */
+	/* svcauth_unix's ip_maps and gids cached for this rqst's calls */
+	struct svcauth_unix_borrow *rq_auth_borrow;
+	bool			rq_client_lent;	/* rq_client's ref is the cache's */
+	bool			rq_gi_lent;	/* so is rq_cred.cr_group_info's */
 	struct task_struct	*rq_task;	/* service thread */
 	struct net		*rq_bc_net;	/* pointer to backchannel's
 						 * net namespace
