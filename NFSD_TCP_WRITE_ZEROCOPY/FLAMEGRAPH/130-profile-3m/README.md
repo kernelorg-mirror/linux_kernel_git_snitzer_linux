@@ -78,3 +78,17 @@ the latency is the queueing on the busiest CPUs of both hosts.
 One `settled-iops.sh` run of `nfs4k.sh 1053:96` (4,608 READs in
 flight): if the rate is the latency's, IOPS rise; if the busiest CPUs
 bound it, only the latency does.
+
+### Result: t2-r1053 (10:35 to 10:39)
+
+| Run | iodepth | M IOPS (ports) | Mean / p99 a; b (ms) | Server busy (busiest) | Server us a READ | Client busy (busiest) | Client us a READ | Server work CPUs min / median / max | Ring CPUs min / median / max |
+|---|---|---|---|---|---|---|---|---|---|
+| t2-r1052 | 64 | 3.06 (1.52 / 1.54) | 1.00 / 2.51; 0.99 / 2.54 | 76% (100%) | 15.90 | 77% (83%) | 12.08 | 48 / 78 / 89 | 60 / 78 / 100 |
+| t2-r1053 | 96 | 3.36 (1.71 / 1.65) | 1.57 / 3.65; 1.63 / 4.69 | 83% (100%) | 15.81 | 85% (90%) | 12.14 | 53 / 89 / 96 | 75 / 88 / 100 |
+
+Half as many again in flight gave 9.8% more READs at 57% more mean
+latency, the CPU a READ unchanged on both hosts.  The rate was partly
+the latency's at iodepth 64; at 96 both hosts are near their CPUs (the
+server's median work CPU 89%, the client's busiest 90%), so more depth
+buys little more: what is left is CPU a READ on both.  No new kernel
+warning.
