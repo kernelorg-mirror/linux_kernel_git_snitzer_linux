@@ -16,6 +16,22 @@ found it drops sends when a queue stops.
 `fq_codel` back after).  After the passes of round 134; the client back
 on build 541's stack after.
 
+## Result (18 November, 17:05 to 17:20): pfifo_fast saves nothing
+
+| Run | Server qdisc | M IOPS (ports) | p99 a; b (ms) | Server busy, us a READ | Client busy (busiest) | Client us a READ |
+|---|---|---|---|---|---|---|
+| t2-r1072 | fq_codel | 3.57 (1.73 / 1.84) | 3.72; 3.59 | 87%, 15.60 | 84% (91%) | 11.29 |
+| t2-r1073 | pfifo_fast | 3.48 (1.67 / 1.81) | 3.65; 3.82 | 85%, 15.63 | 82% (88%) | 11.31 |
+| t2-r1074 | fq_codel | 3.53 (1.73 / 1.81) | 4.08; 3.56 | 87%, 15.77 | 84% (89%) | 11.42 |
+| t2-r1075 | pfifo_fast | 3.52 (1.69 / 1.83) | 3.69; 3.62 | 87%, 15.82 | 84% (90%) | 11.45 |
+
+fq_codel: 3.55 M at 15.685 us of the server's CPU a READ; pfifo_fast:
+3.50 M at 15.725.  Both inside the runs' spread: the qdisc's root lock
+that round 133's profile showed (0.22 us) does not come back as a
+saving, as round 07 found for WRITEs.  `settled.sh` keeps `fq_codel`;
+both ports were on it again after each run.  No new kernel warning.
+The client is back on build 541's stack.  No pass: nothing is kept.
+
 ## After: the server on the tip's own stack
 
 Mike: "yes, build the tip's svc stack after round 135".  The server has
