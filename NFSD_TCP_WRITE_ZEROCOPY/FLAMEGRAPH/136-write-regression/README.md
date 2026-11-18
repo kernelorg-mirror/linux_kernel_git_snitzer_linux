@@ -199,3 +199,17 @@ No new kernel warning in any; no drive stepped down.
 
 The client is back on build 541's stack.  The DROP switch stays on the
 branch while this round goes on; it is rebased out when the round ends.
+
+## rpciod per-CPU or unbound (plan)
+
+Mike: "yes, start with the rpciod per-CPU switch, I would like to
+preserve these behind a modparam in case they are critical to IOPS or
+READ perf".  `298c732504785` "SUNRPC: Let rpciod run unbound again
+with rpciod_per_cpu=N", a code commit: `sunrpc.rpciod_per_cpu`, load
+time, Y (per-CPU, as `ccaaf769083fe` made it) by default; N allocates
+rpciod `WQ_UNBOUND`, as build 469 has it.  W=1 clean.  The client's
+stack is built from the tip (the choice switch at Y in it), and
+`ab-rpciod.sh 1085:Y 1086:N 1087:Y 1088:N` loads it with or without
+`options sunrpc rpciod_per_cpu=N` for each run (twoport.sh holds an
+unbound rpciod `affinity_strict` to its node, as on build 469), each a
+profiled WRITE pass.  The client back on build 541's stack after.
