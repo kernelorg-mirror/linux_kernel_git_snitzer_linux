@@ -25,3 +25,14 @@ The server runs the tip's own svc stack since 17:24 (round 135, "After").
    commits out one at a time with cbuild/cswap (the splice
    `1b9af79d9f16f` first, then the per-CPU transport map
    `5555163d661a0`, then rpciod per-CPU `ccaaf769083fe`).
+
+## Before the reboot (18 November, 17:25)
+
+| Run | Client | Server | WRITE GB/s | Result |
+|---|---|---|---|---|
+| t2-r1070 (round 134) | build 541, round 132's P stack | round 129's stack | 75.21 | PASS |
+| **t2-r1076** | **build 541's own stack** | **the tip's stack** | **74.60** | PASS, at the mark; no drive stepped down, no new kernel warning |
+| t2-r858, r868 to r871 (rounds 106, 107) | build 469 | build 534's stack then | 77.73 to 77.91 | |
+
+The client has no NFS mounted and is ready for Mike's reboot into
+build 469.
