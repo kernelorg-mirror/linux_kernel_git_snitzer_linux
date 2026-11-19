@@ -671,8 +671,10 @@ xeu_release() {	# the loaded xeu's kmod-xsight release, or why it cannot be told
 		{ echo "loaded xeu is not $f"; return; }
 	# EXP_XEU_RELEASE: an xeu built from kernel-rpmtree's spec but not
 	# installed from its RPM (FLAMEGRAPH round 153's Release 18 in updates/)
-	rpm -qf --qf '%{RELEASE}\n' "$f" 2>/dev/null | head -1 | sed 's/\..*//' | grep . ||
-		{ [ -n "${EXP_XEU_RELEASE:-}" ] && echo "$EXP_XEU_RELEASE"; }
+	# (rpm -qf prints "not owned" on stdout, so its status decides)
+	local r; r=$(rpm -qf --qf '%{RELEASE}\n' "$f" 2>/dev/null) &&
+		{ echo "$r" | head -1 | sed 's/\..*//'; return; }
+	[ -n "${EXP_XEU_RELEASE:-}" ] && echo "$EXP_XEU_RELEASE" || echo "$f not from an RPM"
 }
 nfsd_cpus() {	# how many of nfsd's threads are allowed which CPUs
 	for t in $(pgrep -x nfsd); do taskset -cp $t 2> /dev/null | awk '{print $NF}'; done | sort | uniq -c | awk '{printf "%s%s on %s", (NR > 1 ? ", " : ""), $1, $2}'

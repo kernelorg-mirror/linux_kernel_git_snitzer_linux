@@ -25,7 +25,8 @@ with `num_rings=8`; the arms only reopen the ports.
 
 R8 and P post the receive buffers B does.  Each run is round 151's
 `packets.sh` (IOPS at iodepth 96 with the per-READ counts): B R8 P B P
-R8, t2-r1202 to r1207, and 1 s of bpftrace on the second P run counting
+R8, t2-r1203 to r1208 (t2-r1202, the first B, was refused by the
+audit: `xeu_release` read rpm's "not owned" as a release; fixed), and 1 s of bpftrace on the second P run counting
 xeu's polls.  Then Release 17 back at its `num_rings=4`.
 
 **IOPS only (Mike, 19 November: "these additional tunings should only

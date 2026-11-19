@@ -16,7 +16,8 @@
 #       Tx-i both on c0 + i (ring-irqs.sh), two NAPI contexts a CPU
 #   P   8 rings of 128, tx_in_rx_napi Y: one NAPI context a CPU
 # Each run is ../151-packets/packets.sh (an IOPS run at iodepth 96 with
-# the per-READ counts): B R8 P B P R8, t2-r1202 to r1207.  On P's last
+# the per-READ counts): B R8 P B P R8, t2-r1203 to r1208 (t2-r1202, the first B, was
+# refused by the audit: xeu_release read rpm's "not owned" as a release).  On P's last
 # run, after the counts, 1 s of bpftrace counting xeu's poll calls, to
 # show the TX polls gone.  Then Release 17 back: updates/xeu.ko removed, xeu
 # reloaded at its settled num_rings=4, the settled setting.
@@ -25,7 +26,7 @@ cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit
 G=/var/tmp/zc-run-logs/541; K=/dev/shm/zc-xeu152/xeu-rel18.ko
 U=/lib/modules/$(uname -r)/updates/xeu.ko
 say() { echo "$(date +%T) $*"; }
-for n in $(seq 1202 1207); do [ -e $L/t2-r$n ] && { say "t2-r$n exists"; exit 1; }; done
+for n in $(seq 1203 1208); do [ -e $L/t2-r$n ] && { say "t2-r$n exists"; exit 1; }; done
 idle() { [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ]; }
 pings() { for p in a b; do ping -c2 -W2 -I ${PDEVS[$p]} ${CLIP[$p]} > /dev/null && echo "$p ok" || echo "$p NO REPLY"; done | paste -sd' '; }
 reload() {	# reload <num_rings>
@@ -50,7 +51,7 @@ arm() {	# arm B|R8|P: the arm's environment, the ports opened again for it
 	dmesg | tail -50 | grep -q "tx_in_rx_napi not used" && say "WARNING: tx_in_rx_napi not used on some ring"
 }
 io() {	# io <n> <arm>
-	if [ $2 = P ] && [ $1 = 1206 ]; then
+	if [ $2 = P ] && [ $1 = 1207 ]; then
 		( for i in $(seq 600); do [ -s $L/t2-r$1/pk-srv-1.txt ] && break; sleep 0.2; done
 		  bpftrace -q -e 'kprobe:xeu_rx_poll { @rx = count(); } kprobe:xeu_tx_poll { @tx = count(); } kprobe:xeu_tx_pair_intr { @pair_irq = count(); } interval:s:1 { exit(); }' > $L/t2-r$1-bpf.txt 2>&1 ) &
 	fi
@@ -63,9 +64,14 @@ io() {	# io <n> <arm>
 	[ -s $L/t2-r$1-bpf.txt ] && sed 's/^/    bpftrace 1 s: /' $L/t2-r$1-bpf.txt
 }
 say "pings before: $(pings)"
-cp $K $U && depmod -a && say "Release 18 in updates/: $(modinfo -F srcversion xeu)"
-reload 8 1
-for x in 1202:B 1203:R8 1204:P 1205:B 1206:P 1207:R8; do
+# Already loaded (the restart after t2-r1202): no second reload
+if [ "$(cat /sys/module/xeu/srcversion)" = "$(modinfo -F srcversion $K)" ] && [ "$(cat /sys/module/xeu/parameters/num_rings)" = 8 ]; then
+	say "Release 18 already loaded at num_rings 8"
+else
+	cp $K $U && depmod -a && say "Release 18 in updates/: $(modinfo -F srcversion xeu)"
+	reload 8 1
+fi
+for x in 1203:B 1204:R8 1205:P 1206:B 1207:P 1208:R8; do
 	n=${x%:*}; a=${x#*:}
 	[ "$a" != "${cur:-}" ] && { arm $a; cur=$a; }
 	io $n $a
