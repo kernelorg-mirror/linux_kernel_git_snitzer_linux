@@ -1,0 +1,236 @@
+From 58b51d007a76ea2f080eaad7f7185977be33bf2b Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Thu, 19 Nov 2026 07:08:20 +0000
+Subject: [PATCH] SUNRPC: Find a request awaiting its reply by an xid hash
+
+A transport keeps its requests awaiting a reply in an rb-tree keyed by
+xid.  With 4 KiB random READs at 3.5 M a second over 24 transports,
+some 185 requests wait on each, so every insert and every reply's
+lookup walks about eight nodes, each an rpc_rqst last written by
+another CPU.  The walk, the rebalancing and the lookup took 3.5% of a
+48-CPU client's cycles, 0.42 us a READ.
+
+Hash them by xid instead, into 1024 buckets a transport.  A transport
+hands out its xids in order, so hash_32() leaves the requests in
+flight one to a bucket or nearly, and keeps consecutive ones, inserted
+from different CPUs, off each other's cache lines.  The tree's
+emptiness checks, made without the lock by the autodisconnect timer,
+read a count kept beside the table.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ include/linux/sunrpc/xprt.h |  5 +-
+ net/sunrpc/xprt.c           | 92 +++++++++++++++----------------------
+ 2 files changed, 41 insertions(+), 56 deletions(-)
+
+diff --git a/include/linux/sunrpc/xprt.h b/include/linux/sunrpc/xprt.h
+index 005730623f3be..007cbe17d3789 100644
+--- a/include/linux/sunrpc/xprt.h
++++ b/include/linux/sunrpc/xprt.h
+@@ -77,7 +77,7 @@ struct rpc_rqst {
+ 
+ 	union {
+ 		struct list_head	rq_list;	/* Slot allocation list */
+-		struct rb_node		rq_recv;	/* Receive queue */
++		struct hlist_node	rq_recv;	/* Receive queue */
+ 	};
+ 
+ 	struct list_head	rq_xmit;	/* Send queue */
+@@ -293,7 +293,8 @@ struct rpc_xprt {
+ 						 * backchannel rpc_rqst's */
+ #endif /* CONFIG_SUNRPC_BACKCHANNEL */
+ 
+-	struct rb_root		recv_queue;	/* Receive queue */
++	struct hlist_head	*recv_queue;	/* Receive queue, by xid */
++	unsigned int		recv_count;	/* requests on it */
+ 
+ 	struct {
+ 		unsigned long		bind_count,	/* total number of binds */
+diff --git a/net/sunrpc/xprt.c b/net/sunrpc/xprt.c
+index b6cafe3e34e9a..6f486b5eec73b 100644
+--- a/net/sunrpc/xprt.c
++++ b/net/sunrpc/xprt.c
+@@ -51,6 +51,7 @@
+ #include <linux/sunrpc/bc_xprt.h>
+ #include <linux/rcupdate.h>
+ #include <linux/sched/mm.h>
++#include <linux/hash.h>
+ 
+ #include <trace/events/sunrpc.h>
+ 
+@@ -848,7 +849,7 @@ xprt_schedule_autodisconnect(struct rpc_xprt *xprt)
+ {
+ 	xprt->last_used = jiffies;
+ 	/* A racing enqueue cancels the timer after publishing the request. */
+-	if (data_race(RB_EMPTY_ROOT(&xprt->recv_queue)) &&
++	if (!data_race(xprt->recv_count) &&
+ 	    xprt_has_timer(xprt))
+ 		mod_timer(&xprt->timer, xprt->last_used + xprt->idle_timeout);
+ }
+@@ -858,7 +859,7 @@ xprt_init_autodisconnect(struct timer_list *t)
+ {
+ 	struct rpc_xprt *xprt = timer_container_of(xprt, t, timer);
+ 
+-	if (!RB_EMPTY_ROOT(&xprt->recv_queue))
++	if (data_race(xprt->recv_count))
+ 		return;
+ 	/* Reset xprt->last_used to avoid connect/autodisconnect cycling */
+ 	xprt->last_used = jiffies;
+@@ -989,73 +990,51 @@ void xprt_reconnect_backoff(struct rpc_xprt *xprt, unsigned long init_to)
+ }
+ EXPORT_SYMBOL_GPL(xprt_reconnect_backoff);
+ 
+-enum xprt_xid_rb_cmp {
+-	XID_RB_EQUAL,
+-	XID_RB_LEFT,
+-	XID_RB_RIGHT,
+-};
+-static enum xprt_xid_rb_cmp
+-xprt_xid_cmp(__be32 xid1, __be32 xid2)
++/*
++ * The requests awaiting a reply, hashed by xid.  A transport's xids are
++ * handed out in order, so hash_32() spreads the requests in flight one
++ * to a bucket or nearly, and keeps consecutive ones, inserted from
++ * different CPUs, off each other's cache lines.  An insert or a lookup
++ * touches one bucket and, mostly, one request.
++ */
++#define XPRT_RECV_HASH_BITS	10
++
++static struct hlist_head *
++xprt_recv_bucket(struct rpc_xprt *xprt, __be32 xid)
+ {
+-	if (xid1 == xid2)
+-		return XID_RB_EQUAL;
+-	if ((__force u32)xid1 < (__force u32)xid2)
+-		return XID_RB_LEFT;
+-	return XID_RB_RIGHT;
++	return &xprt->recv_queue[hash_32((__force u32)xid,
++					 XPRT_RECV_HASH_BITS)];
+ }
+ 
+ static struct rpc_rqst *
+-xprt_request_rb_find(struct rpc_xprt *xprt, __be32 xid)
++xprt_request_recv_find(struct rpc_xprt *xprt, __be32 xid)
+ {
+-	struct rb_node *n = xprt->recv_queue.rb_node;
+ 	struct rpc_rqst *req;
+ 
+-	while (n != NULL) {
+-		req = rb_entry(n, struct rpc_rqst, rq_recv);
+-		switch (xprt_xid_cmp(xid, req->rq_xid)) {
+-		case XID_RB_LEFT:
+-			n = n->rb_left;
+-			break;
+-		case XID_RB_RIGHT:
+-			n = n->rb_right;
+-			break;
+-		case XID_RB_EQUAL:
++	hlist_for_each_entry(req, xprt_recv_bucket(xprt, xid), rq_recv)
++		if (req->rq_xid == xid)
+ 			return req;
+-		}
+-	}
+ 	return NULL;
+ }
+ 
+ static void
+-xprt_request_rb_insert(struct rpc_xprt *xprt, struct rpc_rqst *new)
++xprt_request_recv_insert(struct rpc_xprt *xprt, struct rpc_rqst *new)
+ {
+-	struct rb_node **p = &xprt->recv_queue.rb_node;
+-	struct rb_node *n = NULL;
+-	struct rpc_rqst *req;
++	struct rpc_rqst *req = xprt_request_recv_find(xprt, new->rq_xid);
+ 
+-	while (*p != NULL) {
+-		n = *p;
+-		req = rb_entry(n, struct rpc_rqst, rq_recv);
+-		switch(xprt_xid_cmp(new->rq_xid, req->rq_xid)) {
+-		case XID_RB_LEFT:
+-			p = &n->rb_left;
+-			break;
+-		case XID_RB_RIGHT:
+-			p = &n->rb_right;
+-			break;
+-		case XID_RB_EQUAL:
+-			WARN_ON_ONCE(new != req);
+-			return;
+-		}
++	if (req) {
++		WARN_ON_ONCE(new != req);
++		return;
+ 	}
+-	rb_link_node(&new->rq_recv, n, p);
+-	rb_insert_color(&new->rq_recv, &xprt->recv_queue);
++	hlist_add_head(&new->rq_recv, xprt_recv_bucket(xprt, new->rq_xid));
++	WRITE_ONCE(xprt->recv_count, xprt->recv_count + 1);
+ }
+ 
+ static void
+-xprt_request_rb_remove(struct rpc_xprt *xprt, struct rpc_rqst *req)
++xprt_request_recv_remove(struct rpc_xprt *xprt, struct rpc_rqst *req)
+ {
+-	rb_erase(&req->rq_recv, &xprt->recv_queue);
++	hlist_del(&req->rq_recv);
++	WRITE_ONCE(xprt->recv_count, xprt->recv_count - 1);
+ }
+ 
+ /**
+@@ -1069,7 +1048,7 @@ struct rpc_rqst *xprt_lookup_rqst(struct rpc_xprt *xprt, __be32 xid)
+ {
+ 	struct rpc_rqst *entry;
+ 
+-	entry = xprt_request_rb_find(xprt, xid);
++	entry = xprt_request_recv_find(xprt, xid);
+ 	if (entry != NULL) {
+ 		trace_xprt_lookup_rqst(xprt, xid, 0);
+ 		entry->rq_rtt = ktime_sub(ktime_get(), entry->rq_xtime);
+@@ -1164,7 +1143,7 @@ xprt_request_enqueue_receive(struct rpc_task *task)
+ 			sizeof(req->rq_private_buf));
+ 
+ 	/* Add request to the receive list */
+-	xprt_request_rb_insert(xprt, req);
++	xprt_request_recv_insert(xprt, req);
+ 	set_bit(RPC_TASK_NEED_RECV, &task->tk_runstate);
+ 	spin_unlock(&xprt->queue_lock);
+ 
+@@ -1185,7 +1164,7 @@ xprt_request_dequeue_receive_locked(struct rpc_task *task)
+ 	struct rpc_rqst *req = task->tk_rqstp;
+ 
+ 	if (test_and_clear_bit(RPC_TASK_NEED_RECV, &task->tk_runstate))
+-		xprt_request_rb_remove(req->rq_xprt, req);
++		xprt_request_recv_remove(req->rq_xprt, req);
+ }
+ 
+ /**
+@@ -1886,6 +1865,11 @@ struct rpc_xprt *xprt_alloc(struct net *net, size_t size,
+ 	xprt_alloc_id(xprt);
+ 	xprt_init(xprt, net);
+ 
++	xprt->recv_queue = kvzalloc_objs(struct hlist_head,
++					 1U << XPRT_RECV_HASH_BITS);
++	if (!xprt->recv_queue)
++		goto out_free;
++
+ 	for (i = 0; i < num_prealloc; i++) {
+ 		req = kzalloc_obj(struct rpc_rqst);
+ 		if (!req)
+@@ -1911,6 +1895,7 @@ void xprt_free(struct rpc_xprt *xprt)
+ 	xprt_free_all_slots(xprt);
+ 	xprt_free_id(xprt);
+ 	rpc_sysfs_xprt_destroy(xprt);
++	kvfree(xprt->recv_queue);
+ 	kfree_rcu(xprt, rcu);
+ }
+ EXPORT_SYMBOL_GPL(xprt_free);
+@@ -2087,7 +2072,6 @@ static void xprt_init(struct rpc_xprt *xprt, struct net *net)
+ 	spin_lock_init(&xprt->queue_lock);
+ 
+ 	INIT_LIST_HEAD(&xprt->free);
+-	xprt->recv_queue = RB_ROOT;
+ 	INIT_LIST_HEAD(&xprt->xmit_queue);
+ #if defined(CONFIG_SUNRPC_BACKCHANNEL)
+ 	spin_lock_init(&xprt->bc_pa_lock);
+-- 
+2.52.0
+

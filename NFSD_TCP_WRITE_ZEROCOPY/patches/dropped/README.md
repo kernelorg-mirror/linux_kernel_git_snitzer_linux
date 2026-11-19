@@ -283,3 +283,11 @@ wait after a reply's match (183 us in rpciod's queue on the same
 CPU) down to 17 us, and saved nothing: 3.46 M IOPS on both arms
 over three pairs, the client's CPU a READ the same.  The lessons are
 in `FLAMEGRAPH/141-recv-run-ok/README.md`, "Lessons learned".
+
+**`0027`, dropped 19 November (Mike: "revert, seems like dead end"):
+a transport's requests awaiting a reply hashed by xid instead of kept
+in an rb-tree** (FLAMEGRAPH round 143; `58b51d007a76e`, kept on
+`kernel-7.3/canary.pre-drop-xid-hash`).  The client's CPU a READ was
+the same (11.73 against 11.76 us over three pairs), not the 0.42 us
+less that round 142's profile gave the tree; the lesson is in
+`FLAMEGRAPH/143-xid-hash/README.md`, "Dropped".

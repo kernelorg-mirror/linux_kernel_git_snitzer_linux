@@ -43,3 +43,21 @@ and READ passes on P (r1161, r1162).
 - Passes on P: WRITE t2-r1161 **77.92 GB/s PASS**, READ t2-r1162
   **81.88 GB/s PASS**, no new kernel warning.  The client back on its
   `updates/` stack and the settled setting after.
+
+## Dropped
+
+Mike, 19 November: "revert, seems like dead end".  `58b51d007a76e` is
+dropped from the history as rounds 140 and 141's were, not reverted:
+the round's two docs commits replayed on `6f488c495542f`, the code
+round 139's again, the tip before kept as
+`kernel-7.3/canary.pre-drop-xid-hash`, the patch
+`patches/dropped/0027`.
+
+The lesson, the third time on this path (rounds 138, 141, 143): **a
+function's share of a profile on the client is not what removing it
+saves when its samples sit on loads of an `rpc_rqst`**, a line last
+written by another CPU.  Moving the load (iostats per CPU, a hash in
+place of a tree) moves the miss and saves nothing.  The cost to go
+after is the number of cross-CPU touches of a request, which a
+profile by function does not show; a profile of the misses by cache
+line (`perf c2c`) does.
