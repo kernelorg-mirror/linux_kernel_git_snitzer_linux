@@ -17,3 +17,15 @@ supports the memory events"; `arm_spe_pmu.ko` is built and not loaded.
 `modprobe arm_spe_pmu`, and whether a PMU appears (the firmware must
 describe SPE's interrupt in the MADT).  If none, the breakdown is by
 stage from a call-graph profile only.
+
+**No SPE** (`spe-probe.sh`, 09:40): `modprobe arm_spe_pmu` exits 0 and
+no PMU appears, so the firmware does not describe SPE; `perf c2c` cannot
+record on tardis2.  The module stays loaded and idle.  t2-r1185 (round
+148's one run, nconnect 12, the client on `updates/`): 3.55 M IOPS.
+
+Instead, `breakdown.sh 1199` after round 149: one IOPS run, the client
+on `updates/`, and 8 s of `perf record -a -g` on the server with cycles
+(the CPU by stage), `l2d_cache_refill_rd` (reads that missed the core's
+L2: from another core, the L3 or memory) and `ll_cache_miss_rd` (reads
+that went to memory).  Misses by function, not by line: where the cost
+is misses and where it is work.
