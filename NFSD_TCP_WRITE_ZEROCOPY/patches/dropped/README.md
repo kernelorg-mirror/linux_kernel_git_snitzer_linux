@@ -291,3 +291,12 @@ in an rb-tree** (FLAMEGRAPH round 143; `58b51d007a76e`, kept on
 the same (11.73 against 11.76 us over three pairs), not the 0.42 us
 less that round 142's profile gave the tree; the lesson is in
 `FLAMEGRAPH/143-xid-hash/README.md`, "Dropped".
+
+**`0028`, dropped 19 November (Mike: "rewrite history to just not
+include the code change"): each new nconnect task given the less loaded,
+by `queuelen`, of two transports picked at random** (FLAMEGRAPH round
+146; `031dead35013f`, kept on `kernel-7.3/canary.pre-drop-leastloaded`).
+4 KiB READs the same as round-robin (3.52 M against 3.47, the client's
+CPU a READ 11.27 against 11.42 us, inside the spread); the WRITE pass
+below the mark twice (t2-r1180 75.76 GB/s, port a 37.09 at p99 228 ms;
+t2-r1183 77.45).  The account is `FLAMEGRAPH/146-rr-walk/README.md`.

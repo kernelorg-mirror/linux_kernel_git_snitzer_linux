@@ -1,0 +1,116 @@
+From 031dead35013f98bcd97cb49bf0e60933e48706d Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Thu, 19 Nov 2026 08:56:13 +0000
+Subject: [PATCH] SUNRPC: Give each new task the less loaded of two transports
+
+With nconnect, a new task's transport is the next one round-robin,
+passing over any whose queuelen is above the switch's average.  That
+ignores how loaded the chosen transport is unless it is above the
+average, and finding the next one reads each transport passed over;
+the walk also writes the iterator's cursor, which every CPU shares.
+
+Give the task the less loaded, by queuelen, of two active transports
+picked at random from the switch's array.  Comparing all of them would
+read every transport's queuelen, a line every task writes on whichever
+CPU runs it; two choices read two and keep the most loaded transport
+close to the average, and the cursor is no longer written.  With fewer
+than two transports, or neither pick active, the round-robin step is
+taken as before.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ net/sunrpc/xprtmultipath.c | 51 +++++++++++++++++++++++++++++++++++---
+ 1 file changed, 47 insertions(+), 4 deletions(-)
+
+diff --git a/net/sunrpc/xprtmultipath.c b/net/sunrpc/xprtmultipath.c
+index 0c3ea10ad6754..58a13060d0b4a 100644
+--- a/net/sunrpc/xprtmultipath.c
++++ b/net/sunrpc/xprtmultipath.c
+@@ -13,6 +13,7 @@
+ #include <linux/list.h>
+ #include <linux/rcupdate.h>
+ #include <linux/rculist.h>
++#include <linux/random.h>
+ #include <linux/slab.h>
+ #include <linux/spinlock.h>
+ #include <linux/sunrpc/xprt.h>
+@@ -260,10 +261,12 @@ void xprt_switch_put(struct rpc_xprt_switch *xps)
+ }
+ 
+ /**
+- * rpc_xprt_switch_set_roundrobin - Set a round-robin policy on rpc_xprt_switch
++ * rpc_xprt_switch_set_roundrobin - Spread tasks over an rpc_xprt_switch
+  * @xps: pointer to struct rpc_xprt_switch
+  *
+- * Sets a round-robin default policy for iterators acting on xps.
++ * Sets the default policy for iterators acting on xps that spreads new
++ * tasks over its transports: the less loaded of two, see
++ * xprt_iter_next_entry_leastloaded().
+  */
+ void rpc_xprt_switch_set_roundrobin(struct rpc_xprt_switch *xps)
+ {
+@@ -547,6 +550,46 @@ struct rpc_xprt *xprt_iter_next_entry_roundrobin(struct rpc_xprt_iter *xpi)
+ 			xprt_switch_find_next_entry_roundrobin);
+ }
+ 
++/*
++ * The less loaded, by queuelen (the tasks bound to it), of two active
++ * transports picked at random.  Finding the least loaded of all of them
++ * would read every transport's queuelen, a line each task writes on
++ * whichever CPU runs it; two choices read two, and keep the most loaded
++ * transport close to the average.  Nor is the iterator's cursor, shared
++ * by every CPU, written.  With fewer than two transports, or two picks
++ * that are not active, the round-robin step as before.
++ */
++static
++struct rpc_xprt *xprt_iter_next_entry_leastloaded(struct rpc_xprt_iter *xpi)
++{
++	struct rpc_xprt_switch *xps = rcu_dereference(xpi->xpi_xpswitch);
++	struct rpc_xprt_switch_array *a;
++	struct rpc_xprt *x, *y;
++	unsigned int i, j;
++
++	if (xps == NULL)
++		return NULL;
++	a = rcu_dereference(xps->xps_array);
++	if (!a || a->n < 2)
++		return xprt_iter_next_entry_roundrobin(xpi);
++	i = get_random_u32_below(a->n);
++	j = get_random_u32_below(a->n - 1);
++	if (j >= i)
++		j++;
++	x = a->xprts[i];
++	y = a->xprts[j];
++	if (!xprt_is_active(x))
++		x = NULL;
++	if (!xprt_is_active(y))
++		y = NULL;
++	if (x && y)
++		return atomic_long_read(&y->queuelen) <
++		       atomic_long_read(&x->queuelen) ? y : x;
++	if (x || y)
++		return x ? x : y;
++	return xprt_iter_next_entry_roundrobin(xpi);
++}
++
+ static
+ struct rpc_xprt *xprt_switch_find_next_entry_all(struct rpc_xprt_switch *xps,
+ 		const struct rpc_xprt *cur)
+@@ -715,12 +758,12 @@ const struct rpc_xprt_iter_ops rpc_xprt_iter_singular = {
+ 	.xpi_next = xprt_iter_first_entry,
+ };
+ 
+-/* Policy for round-robin iteration of entries in the rpc_xprt_switch */
++/* Policy for spreading tasks over the entries in the rpc_xprt_switch */
+ static
+ const struct rpc_xprt_iter_ops rpc_xprt_iter_roundrobin = {
+ 	.xpi_rewind = xprt_iter_default_rewind,
+ 	.xpi_xprt = xprt_iter_current_entry,
+-	.xpi_next = xprt_iter_next_entry_roundrobin,
++	.xpi_next = xprt_iter_next_entry_leastloaded,
+ };
+ 
+ /* Policy for once-through iteration of entries in the rpc_xprt_switch */
+-- 
+2.52.0
+
