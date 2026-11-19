@@ -11,7 +11,7 @@
 # into each second's spread over nfsd's CPUs 8-55 and, over the mpstat
 # window, each CPU's mean connections beside its busy.  Since round 156
 # also rtc_stats whole at the load's start and 19th second, and from then
-# 2 s of conn.bt: each connection's calls by the rtc work item or by nfsd
+# 2 s of conn.bt (since round 158 only with CONN=1): each connection's calls by the rtc work item or by nfsd
 # threads, its work CPU and THREAD_CALLS flag (conn.awk).  Only reads.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh > /dev/null 2>&1
@@ -30,6 +30,10 @@ for n in "$@"; do
 		# window, each connection's calls for 2 s
 		if [ $B = 0 ] && [ $(wc -l < $W) -ge 19 ]; then
 			B=1; cp /sys/kernel/debug/nfsd/rtc_stats $L/t2-r$n/rtc-stats-1.txt
+		fi
+		# since round 158 only with CONN=1: bpftrace slows the run
+		if [ $B = 1 ] && [ "${CONN:-0}" = 1 ]; then
+			B=2
 			bpftrace -q $P/conn.bt > $L/t2-r$n/conn-bpf.txt 2>&1 & bpid=$!
 		fi
 		sleep 1
@@ -44,7 +48,9 @@ for n in "$@"; do
 	# since round 156: the rtc counters over the load's first 19 s, a READ
 	join <(sort $L/t2-r$n/rtc-stats-0.txt) <(sort $L/t2-r$n/rtc-stats-1.txt) 2>/dev/null |
 		awk '$3 ~ /^[0-9]+$/ && $3 != $2 { printf "%s %d; ", $1, $3 - $2 } END { print "" }' | sed 's/^/    rtc counters, seconds 0-19: /'
-	awk -f $P/conn.awk $L/t2-r$n/conn-bpf.txt | tee $L/t2-r$n/conn.txt | tail -3 | sed 's/^/    /'
+	[ -s $L/t2-r$n/conn-bpf.txt ] && awk -f $P/conn.awk $L/t2-r$n/conn-bpf.txt | tee $L/t2-r$n/conn.txt | tail -3 | sed 's/^/    /'
+	# a connection whose work item ran off its work CPU (round 156's bug)
+	[ -s $L/t2-r$n/conn.txt ] && awk 'NR > 1 && $3 ~ /^[0-9]+$/ && $3 != $4 { n++; l = l " " $1 ":" $2 "(cpu " $3 ", ran " $4 ")" } END { printf "    connections off their work CPU: %d%s\n", n, l }' $L/t2-r$n/conn.txt
 
 done
 say "placement all done"
