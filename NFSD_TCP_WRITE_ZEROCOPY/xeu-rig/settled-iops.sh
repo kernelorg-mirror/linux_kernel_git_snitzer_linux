@@ -22,13 +22,12 @@
 #                             r975)                    EXP_FH_BORROW_SLOTS
 #                             (Mike, 18 November: "keep fh_borrow_slots
 #                             at 48")
-#   sunrpc.svc_rtc_spill_cpus 0-7,56-63 at svc_rtc_spill_weight 1
-#                             the rtc balance spilling onto the ring CPUs,
-#                             one connection each at most: 2.73 to 2.78 M
-#                             IOPS against 2.57 to 2.58 off (round 116,
-#                             t2-r995 to r1000; Mike, 18 November: "add
-#                             the spill at weight 1 to settled-iops.sh")
-#                                  EXP_RTC_SPILL_CPUS, EXP_RTC_SPILL_WEIGHT
+#   (no sunrpc.svc_rtc_spill_cpus since 19 November: settled.sh's none.
+#   The spill onto the ring CPUs, 0-7,56-63 at weight 1, gave 2.73 to 2.78
+#   M IOPS against 2.57 to 2.58 off in round 116 (t2-r995 to r1000), but
+#   in round 154 it cost 1.05 us of the server's CPU a READ at the same
+#   IOPS (15.75 against 14.70 us, t2-r1211 to r1214); Mike: "shouldn't it
+#   be disabled for all now?")
 #   sunrpc.svc_rtc_send_more Y  the rtc replies batched with MSG_MORE: 16%
 #                             fewer segments out a reply, 2.71 to 2.76 M
 #                             IOPS against 2.67 to 2.70 at N and p99 about
@@ -122,8 +121,6 @@ export EXP_POOL_MODE=${EXP_POOL_MODE:-percpu}
 export EXP_SVCAUTH_BORROW=${EXP_SVCAUTH_BORROW:-Y}
 export EXP_EXPORT_BORROW_SLOTS=${EXP_EXPORT_BORROW_SLOTS:-16}
 export EXP_FH_BORROW_SLOTS=${EXP_FH_BORROW_SLOTS:-48}
-export EXP_RTC_SPILL_CPUS=${EXP_RTC_SPILL_CPUS:-0-7,56-63}
-export EXP_RTC_SPILL_WEIGHT=${EXP_RTC_SPILL_WEIGHT:-1}
 export EXP_RTC_SEND_MORE=${EXP_RTC_SEND_MORE:-Y}
 export EXP_TCP_LOB=${EXP_TCP_LOB:-1048576}
 export EXP_RTC_REBALANCE_MS=${EXP_RTC_REBALANCE_MS:-250}
@@ -138,7 +135,7 @@ run)
 	"$@"; rc=$?
 	env -u EXP_NFSD_THREADS -u EXP_SYSCTL -u EXP_POOL_MODE -u EXP_SVCAUTH_BORROW \
 		-u EXP_EXPORT_BORROW_SLOTS -u EXP_FH_BORROW_SLOTS \
-		-u EXP_RTC_SPILL_CPUS -u EXP_RTC_SPILL_WEIGHT -u EXP_RTC_SEND_MORE \
+		-u EXP_RTC_SEND_MORE \
 		-u EXP_TCP_LOB -u EXP_RTC_REBALANCE_MS ./settled.sh apply > /var/tmp/zc-run-logs/settled-iops-after.txt 2>&1
 	echo "settled again: $(tail -1 /var/tmp/zc-run-logs/settled-iops-after.txt)"
 	exit $rc ;;
