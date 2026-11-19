@@ -23,9 +23,11 @@ reads() { awk '/^proc3 /{print $9}' /proc/net/rpc/nfsd; }
 (
 	W=$O/run/wire-sec.tsv
 	for i in $(seq 1500); do [ -f $W ] && [ $(wc -l < $W) -ge 8 ] && break; sleep 0.2; done
-	r0=$(reads); t0=$(date +%s.%N)
-	perf record -q -N -a -g -e cycles -F 999 -o $D -- sleep 8 > /dev/null 2>&1
-	r1=$(reads); t1=$(date +%s.%N)
+	# READs over 8 s beside the record's 8 s (perf's own start and
+	# finish took 2.7 s more in t2-r1231, which counted READs over both)
+	perf record -q -N -a -g -e cycles -F 999 -o $D -- sleep 8 > /dev/null 2>&1 & ppid=$!
+	sleep 0.5; r0=$(reads); t0=$(date +%s.%N); sleep 8; r1=$(reads); t1=$(date +%s.%N)
+	wait $ppid
 	echo "reads $((r1 - r0)) seconds $(echo "$t1 - $t0" | bc)" > $O/prof-window.txt
 ) &
 ./settled-iops.sh run ../FLAMEGRAPH/108-4k-randread/nfs4k.sh $n:$q; rc=$?
