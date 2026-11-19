@@ -26,9 +26,15 @@ with `num_rings=8`; the arms only reopen the ports.
 R8 and P post the receive buffers B does.  Each run is round 151's
 `packets.sh` (IOPS at iodepth 96 with the per-READ counts): B R8 P B P
 R8, t2-r1202 to r1207, and 1 s of bpftrace on the second P run counting
-xeu's polls.  Then on P the WRITE pass (r1208) and READ pass (r1209), at
-8 rings of 64 (the passes' settled 4 of 128 posted), and Release 17
-back at its `num_rings=4`.
+xeu's polls.  Then Release 17 back at its `num_rings=4`.
+
+**IOPS only (Mike, 19 November: "these additional tunings should only
+be used for the IOPS pass at this point, so don't change READ and WRITE
+passes.  So that implies testing IOPS requires focused xeu driver
+reload").**  Release 18, 8 rings and `tx_in_rx_napi` are loaded only
+for IOPS runs, by a reload of xeu, and taken out after; the WRITE and
+READ passes stay on the settled Release 17 at 4 rings, which this
+round does not change, so it runs no pass.
 
 The rig: `settled.sh` holds `tx_in_rx_napi` N (not held on an xeu
 without it), audits more than four rings at ring-irqs.sh's layout, and

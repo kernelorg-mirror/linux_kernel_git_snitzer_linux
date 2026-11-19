@@ -1,7 +1,10 @@
 #!/bin/bash
 # ab-pair.sh: FLAMEGRAPH round 153, xeu Release 18's one NAPI context a
 # ring pair (tx_in_rx_napi) and eight rings of 128 a port (Mike, 19
-# November: "yes, do the reloads and run round 153"; "maybe we try 8
+# November: "yes, do the reloads and run round 153"; "these additional
+# tunings should only be used for the IOPS pass at this point, so don't
+# change READ and WRITE passes", so no passes here: they stay on the
+# settled Release 17 at 4 rings; "maybe we try 8
 # rings that are smaller in size so as not to expand overall pool region
 # size").  Release 18 (kernel-rpmtree 081f549, built at
 # /dev/shm/zc-xeu152/xeu-rel18.ko, srcversion D8F04765830566CCA26AE4B) is
@@ -15,15 +18,14 @@
 # Each run is ../151-packets/packets.sh (an IOPS run at iodepth 96 with
 # the per-READ counts): B R8 P B P R8, t2-r1202 to r1207.  On P's last
 # run, after the counts, 1 s of bpftrace counting xeu's poll calls, to
-# show the TX polls gone.  Then on P the WRITE pass (r1208) and the READ
-# pass (r1209), at 8 rings of 64 (the passes' settled 4 of 128 posted), and Release 17 back: updates/xeu.ko removed, xeu
+# show the TX polls gone.  Then Release 17 back: updates/xeu.ko removed, xeu
 # reloaded at its settled num_rings=4, the settled setting.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh > /dev/null 2>&1
 G=/var/tmp/zc-run-logs/541; K=/dev/shm/zc-xeu152/xeu-rel18.ko
 U=/lib/modules/$(uname -r)/updates/xeu.ko
 say() { echo "$(date +%T) $*"; }
-for n in $(seq 1202 1209); do [ -e $L/t2-r$n ] && { say "t2-r$n exists"; exit 1; }; done
+for n in $(seq 1202 1207); do [ -e $L/t2-r$n ] && { say "t2-r$n exists"; exit 1; }; done
 idle() { [ "$(ss -Htn state established '( sport = :2049 )' | wc -l)" = 0 ]; }
 pings() { for p in a b; do ping -c2 -W2 -I ${PDEVS[$p]} ${CLIP[$p]} > /dev/null && echo "$p ok" || echo "$p NO REPLY"; done | paste -sd' '; }
 reload() {	# reload <num_rings>
@@ -68,11 +70,6 @@ for x in 1202:B 1203:R8 1204:P 1205:B 1206:P 1207:R8; do
 	[ "$a" != "${cur:-}" ] && { arm $a; cur=$a; }
 	io $n $a
 done
-arm P
-# The passes run twoport.sh's two-port setting, 4 rings of 128 when
-# settled: P takes 8 rings of 64, the same receive buffers posted.
-say "P: the WRITE pass t2-r1208: $(RINGS=8 ENTRIES=64 ./write-check.sh 1208 2>&1 | grep 'write check' | tail -1)"
-say "P: the READ pass t2-r1209: $(RINGS=8 ENTRIES=64 ./read-check.sh 1209 2>&1 | grep 'read check' | tail -1)"
 rm -f $U && depmod -a && say "updates/xeu.ko removed: $(modinfo -n xeu)"
 unset EXP_RINGS EXP_ENTRIES EXP_XEU_tx_in_rx_napi EXP_XEU_num_rings EXP_XEU_RELEASE
 reload 4 2
