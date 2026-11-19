@@ -49,3 +49,11 @@ then the WRITE and READ passes on P (r1171, r1172).
 
 **Kept**: `49c73b8d1c2d8` and `bdf70175fc522` stay at the tip.  The
 client's `updates/` does not have them yet; that waits on Mike's word.
+
+**In the client's `updates/` since 19 November** (Mike: "yes, put both
+fixes in the client's updates/"): the 17 modules built from
+`bdf70175fc522` (sunrpc `036CCE7D414F6EAC3D6FDDD`), `depmod -a`, and
+loaded with `cswap131.sh stock`.  The stack before (`9d2c9fcede7b6`,
+sunrpc `2355B960B6A9951899AF6B4`) is kept in the client's
+`/root/zc-ckern/updates-9d2c9fcede7b6/`.  From here B in an A/B is this
+stack, at about 11.3 us of client CPU a READ.
