@@ -57,3 +57,16 @@ same as not having them; this round runs on it.
   run, and which connections, is round 156's to find.
 - **No spill, three runs (t2-r1212, r1216, r1217):** 14.42 to 14.88 us of
   server CPU a READ, against 15.31 to 16.18 with it (round 154).
+
+# Round 156: which connections miss the rtc path, and why
+
+Mike, 19 November: "yes, add that to placement.sh and run round 156".
+`placement.sh` now also copies `rtc_stats` whole at the load's start and
+its 19th second (the counters' change over the run: diverted,
+undiverted, each fallback), and from then runs `conn.bt` for 2 s: for
+each connection, its calls run by its rtc work item (`svc_rtc_work`)
+against those received by nfsd threads (`svc_tcp_recvfrom` from a task
+named nfsd), its work CPU, where its work item last ran, its
+`SVC_RTC_THREAD_CALLS` flag (its calls sent to threads) and its
+addresses.  `conn.awk` gives a line a connection and which took the
+thread path.  `placement.sh 1218 1219`.

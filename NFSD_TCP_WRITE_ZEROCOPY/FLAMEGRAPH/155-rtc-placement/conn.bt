@@ -1,0 +1,39 @@
+// conn.bt: FLAMEGRAPH round 156, each NFS connection's calls for 2 s:
+// run by its rtc work item (svc_rtc_work) or received by an nfsd thread
+// (svc_tcp_recvfrom from a task named nfsd), its rtc CPU, whether its
+// work item holds SVC_RTC_THREAD_CALLS (bit 2: its calls go to threads),
+// and its addresses (the server's, so the port, and the client's port).
+kprobe:svc_rtc_work
+{
+	$c = (struct svc_rtc_conn *)arg0;
+	$x = $c->xprt;
+	@rtc[$x] = count();
+	@cpu[$x] = $c->cpu;
+	@ran_on[$x] = cpu;
+}
+kprobe:svc_tcp_recvfrom /strncmp(comm, "nfsd", 4) == 0/
+{
+	$r = (struct svc_rqst *)arg0;
+	$x = $r->rq_xprt;
+	@thr[$x] = count();
+	$c = $x->xpt_rtc;
+	if ($c) {
+		@cpu[$x] = $c->cpu;
+		@tc[$x] = ($c->flags >> 2) & 1;
+	}
+	$s = (struct sockaddr_in *)((uint64)$x + offsetof(struct svc_xprt, xpt_remote));
+	$l = (struct sockaddr_in *)((uint64)$x + offsetof(struct svc_xprt, xpt_local));
+	@lip[$x] = ntop($l->sin_addr.s_addr);
+	@rport[$x] = bswap($s->sin_port);
+}
+kprobe:svc_rtc_work
+{
+	$c = (struct svc_rtc_conn *)arg0;
+	$x = $c->xprt;
+	$s = (struct sockaddr_in *)((uint64)$x + offsetof(struct svc_xprt, xpt_remote));
+	$l = (struct sockaddr_in *)((uint64)$x + offsetof(struct svc_xprt, xpt_local));
+	@lip[$x] = ntop($l->sin_addr.s_addr);
+	@rport[$x] = bswap($s->sin_port);
+	@tc[$x] = ($c->flags >> 2) & 1;
+}
+interval:s:2 { exit(); }
