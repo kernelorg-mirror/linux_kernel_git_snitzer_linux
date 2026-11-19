@@ -67,7 +67,8 @@ pass (t2-r1183), then B's (t2-r1184) on drives in the same state.
 - READ pass t2-r1181 **81.87 GB/s PASS**.
 - **WRITE pass below the mark twice**: t2-r1180 **75.76 GB/s** (port a
   37.09 at p99 228 ms), t2-r1183 **77.45** (38.73 / 38.72 at 86.5 ms).
-  A regression: round-robin hands identical 1 MiB WRITEs to the
+  B's WRITE pass on the same drives right after, t2-r1184: **77.82
+  PASS** (38.87 / 38.95 at p99 81 / 82 ms).  A regression: round-robin hands identical 1 MiB WRITEs to the
   connections in strict turn, and two random picks only even them out
   on average, so some run deeper and the WRITEs wait on the deepest.
 
