@@ -25,7 +25,7 @@ the WRITE and READ passes on P (r1197, r1198).
   0.3 us more of the server's CPU a READ, within a run's spread and not
   explained (the choice is meant to be round-robin's).
 - WRITE pass t2-r1197 **77.86 GB/s PASS**, no drive stepped down, no
-  new kernel warning.
+  new kernel warning; READ pass t2-r1198 **81.83 GB/s PASS**.
 
 **Kept** (Mike: "just keep it, in general its a small win"), and **in
 the client's `updates/` since 19 November** (Mike: "yes, put it in the
