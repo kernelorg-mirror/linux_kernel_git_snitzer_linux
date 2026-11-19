@@ -22,3 +22,29 @@ there):
 `ab-iostats.sh`: B (the `updates/` stack) against P, 4 KiB random READs
 at iodepth 96 B P B P (t2-r1129 to r1132), then the WRITE and READ
 passes on P (r1133, r1134).
+
+## The A/B (23:38 to 00:02)
+
+| Run | Arm | 4 KiB IOPS, iodepth 96 | p99 a / b (ms) | CPU a READ, server / client (us) | Client busy (busiest) |
+|---|---|---|---|---|---|
+| t2-r1129 | B | 3.42 M | 4.82 / 4.08 | 15.72 / 11.79 | 84% (99%) |
+| t2-r1130 | P | 3.49 M | 3.26 / 3.39 | 16.14 / 11.83 | 86% (93%) |
+| t2-r1131 | B | 3.52 M | 3.49 / 3.33 | 16.00 / 11.73 | 86% (99%) |
+| t2-r1132 | P | 3.59 M | 3.23 / 3.42 | 15.69 / 11.63 | 87% (91%) |
+| mean | B | 3.47 M | | 15.86 / 11.76 | |
+| mean | P | 3.54 M (+2.0%) | | 15.92 / 11.73 | |
+
+P is 2% ahead, inside B's own spread (3.42 to 3.63 M on this stack),
+with a shorter p99 in both runs and the client's busiest CPU at 91 to
+93% against 99% in both of B's; the client's CPU a READ does not move
+(11.73 against 11.76 us), not the 0.36 us round 137 pointed at.
+
+On P: the WRITE pass t2-r1133 **77.94 GB/s PASS**; the READ pass
+t2-r1134 80.16 GB/s, **FAIL on one new kernel message**, the server's
+NIC firmware mailbox on port b at 00:00:26 ("RM message [a4:00.0] send
+timed out", "XSL_MSG_GET_LINK_CONFIG failed, error: 110"), the third
+in this boot's 25 hours; nothing on the client.  tardis2's EFI
+partition on nvme8 also logs "FAT-fs (nvme8n1p1): Volume was not
+properly unmounted" every few minutes (23:33, 23:40, 23:48, 23:59),
+which the pass does not count.  The client back on `updates/` and the
+settled setting after.  Round 138 needs a READ pass that passes.
