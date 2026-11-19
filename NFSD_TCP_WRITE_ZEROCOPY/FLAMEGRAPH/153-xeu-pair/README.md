@@ -72,3 +72,37 @@ a load and puts them back to 256 after, so the settled IOPS load has
 `ab-pair2.sh` was stopped before its first run and now runs R8 P R8 P at
 8 x 64 a port (t2-r1205 to r1208), then B twice on Release 17
 (t2-r1209, r1210).
+
+## Result: neither 8 rings nor one NAPI context a pair saves CPU
+
+`ab-pair2.sh`, 19:25 to 19:50.  R8 and P at 8 x 64 a port on Release 18
+(`num_rings=8`), B on Release 17 at the settled setting.  No new kernel
+warning; no ring logged "tx_in_rx_napi not used".
+
+| run | arm | IOPS | a / b M | p99 ms a / b | server busy | server us a READ | client us a READ | NET_RX ring CPUs | NET_RX nfsd CPUs |
+|---|---|---|---|---|---|---|---|---|---|
+| `t2-r1205` | R8 | 3.64 M | 1.78 / 1.86 | 3.10 / 3.13 | 90% | 15.82 | 11.21 | 0.541 | 0.455 |
+| `t2-r1206` | P | 3.59 M | 1.76 / 1.83 | 3.33 / 3.29 | 89% | 15.87 | 11.23 | 0.345 | 0.459 |
+| `t2-r1207` | R8 | 3.51 M | 1.77 / 1.74 | 4.75 / 6.13 | 85% | 15.50 | 11.21 | 0.595 | 0.499 |
+| `t2-r1208` | P | 3.40 M | 1.53 / 1.87 | 6.59 / 4.62 | 83% | 15.62 | 11.44 | 0.384 | 0.466 |
+| `t2-r1209` | B | 3.58 M | 1.85 / 1.73 | 3.06 / 3.26 | 88% | 15.73 | 11.26 | 0.340 | 0.465 |
+| `t2-r1210` | B | 3.59 M | 1.84 / 1.75 | 3.13 / 3.16 | 89% | 15.87 | 11.10 | 0.352 | 0.485 |
+
+Means: B 15.80 us a READ at 3.59 M, R8 15.66 at 3.58 M, P 15.75 at
+3.50 M.  Every run is within 15.50 to 15.87: no arm differs from B by
+more than runs of one arm differ from each other.
+
+- **P works as designed:** in 1 s of bpftrace on t2-r1208, `xeu_rx_poll`
+  ran 1.57 M times and `xeu_tx_poll` never; the TX interrupts ran the RX
+  poll 255 K times.  It halves R8's ring-CPU softirqs (0.35 against
+  0.54 to 0.60 a READ), back to B's, and saves no CPU: the polls it
+  removes are cheap.  The RFS hop (0.46 to 0.50 a READ) is the same in
+  every arm.
+- **The rings and ports on B are even:** every ring 384K to 443K frames
+  a second, the ports 1.84 / 1.75 M.  The two runs with port a behind
+  (t2-r1203, 1.53 M; t2-r1208, 1.53 M with rings 2 and 5 at 121K) were
+  on Release 18; in t2-r1208 the ring CPUs were 84 to 100% busy, about
+  half of it nfsd's work spilled onto them (`svc_rtc_spill_cpus`
+  0-7,56-63): round 154 tries no spill.
+- So xeu Patch16 (`tx_in_rx_napi`) and 8 rings are not kept for IOPS;
+  Release 17 is back at `num_rings=4`, the settled setting.
