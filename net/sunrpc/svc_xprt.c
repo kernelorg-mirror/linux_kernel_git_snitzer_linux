@@ -1426,7 +1426,8 @@ static void svc_rtc_queue_pinned(struct svc_rtc_conn *conn,
 	 */
 	if (cpu < 0 || !cpu_online(cpu))
 		cpu = raw_smp_processor_id();
-	if (!queue_work_on(cpu, xprt->xpt_server->sv_rtc_wq, &conn->work))
+	if (!queue_work_on(cpu, xprt->xpt_server->sv_rtc_wq,
+			   READ_ONCE(conn->active)))
 		svc_rtc_run_done(xprt);
 }
 
@@ -2077,18 +2078,55 @@ static void svc_rtc_pool_decay(struct work_struct *work);
 static void svc_rtc_rebalance(struct work_struct *work);
 
 /*
+ * A connection moved to another CPU (svc_rtc_place(), svc_rtc_rebalance())
+ * runs there from its next queue.  But a work item queued while it runs
+ * is queued where it runs, so the workqueue never runs it on two CPUs at
+ * once, and a busy connection's work item is kicked again before each
+ * pass ends: queued to its new CPU, it would run on the old one for good.
+ * So a pass on the wrong CPU does no work.  It makes the connection's
+ * other work item the one kicks queue and queues that, which is not
+ * running anywhere, on the connection's CPU with this pass's pin.  A
+ * pass of the other one already queued, from before an earlier move,
+ * finds it is no longer the active one and only kicks the active one.
+ * Not while stopping: svc_rtc_xprt_stop() waits on a final pass.
+ *
+ * Returns true when this pass is to do nothing more.
+ */
+static bool svc_rtc_move(struct svc_rtc_conn *conn, struct work_struct *work)
+{
+	struct svc_xprt *xprt = conn->xprt;
+	struct work_struct *next;
+	int cpu;
+
+	if (work != READ_ONCE(conn->active)) {
+		svc_rtc_kick(conn);
+		svc_rtc_run_done(xprt);
+		return true;
+	}
+	cpu = READ_ONCE(conn->cpu);
+	if (cpu < 0 || cpu == raw_smp_processor_id() || !cpu_online(cpu) ||
+	    test_bit(SVC_RTC_STOPPING, &conn->flags))
+		return false;
+	next = work == &conn->work ? &conn->work_alt : &conn->work;
+	WRITE_ONCE(conn->active, next);
+	if (!queue_work_on(cpu, xprt->xpt_server->sv_rtc_wq, next))
+		svc_rtc_run_done(xprt);
+	return true;
+}
+
+/*
  * One work item per connection: finish completed async calls (encode and
  * queue their replies), take the next receive, then send the FIFO.
  */
-static void svc_rtc_work(struct work_struct *work)
+static void svc_rtc_pass(struct svc_rtc_conn *conn, struct work_struct *work)
 {
-	struct svc_rtc_conn *conn = container_of(work, struct svc_rtc_conn,
-						 work);
 	struct svc_xprt *xprt = conn->xprt;
 	enum svc_rtc_reason reason;
 	bool hold = false;
 	bool dead;
 
+	if (svc_rtc_move(conn, work))
+		return;
 	svc_rtc_stat_inc(runs);
 	svc_rtc_run_completions(conn);
 
@@ -2138,6 +2176,16 @@ sends:
 	svc_rtc_run_done(xprt);
 }
 
+static void svc_rtc_work(struct work_struct *work)
+{
+	svc_rtc_pass(container_of(work, struct svc_rtc_conn, work), work);
+}
+
+static void svc_rtc_work_alt(struct work_struct *work)
+{
+	svc_rtc_pass(container_of(work, struct svc_rtc_conn, work_alt), work);
+}
+
 /**
  * svc_rtc_xprt_attach - Give a connected transport a work item
  * @xprt: new transport, not yet visible to svc_xprt_enqueue()
@@ -2151,6 +2199,8 @@ VISIBLE_IF_KUNIT int svc_rtc_xprt_attach(struct svc_xprt *xprt, gfp_t gfp)
 	if (!conn)
 		return -ENOMEM;
 	INIT_WORK(&conn->work, svc_rtc_work);
+	INIT_WORK(&conn->work_alt, svc_rtc_work_alt);
+	conn->active = &conn->work;
 	conn->xprt = xprt;
 	conn->cpu = -1;
 	init_llist_head(&conn->sendq);
@@ -2181,6 +2231,12 @@ VISIBLE_IF_KUNIT void svc_rtc_xprt_stop(struct svc_xprt *xprt)
 	 * which sees STOPPING and releases every queued reply unsent.
 	 */
 	svc_rtc_kick(conn);
+	/*
+	 * A pass that began before STOPPING was seen may move the work item
+	 * once (svc_rtc_move()); the final pass is then the other one's.
+	 */
+	flush_work(&conn->work);
+	flush_work(&conn->work_alt);
 	flush_work(&conn->work);
 }
 EXPORT_SYMBOL_IF_KUNIT(svc_rtc_xprt_stop);

@@ -224,6 +224,12 @@ struct svc_rtc_send {
 
 struct svc_rtc_conn {
 	struct work_struct	work;
+	/*
+	 * A move to another CPU alternates between @work and @work_alt:
+	 * @active is the one kicks queue (svc_rtc_move()).
+	 */
+	struct work_struct	work_alt;
+	struct work_struct	*active;
 	struct svc_xprt		*xprt;
 	int			cpu;	/* work CPU, set by svc_rtc_place() */
 	unsigned long		flags;
