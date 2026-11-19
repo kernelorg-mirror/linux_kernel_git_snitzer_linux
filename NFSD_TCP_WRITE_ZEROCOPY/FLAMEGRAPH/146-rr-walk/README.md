@@ -19,3 +19,23 @@ cursor itself, `cl_xpi`, is still written by every choice.
 4 KiB random READs at iodepth 96, B P B P B P (t2-r1173 to r1178),
 round 144's perf c2c on P (r1179), then the WRITE and READ passes on P
 (r1180, r1181).
+
+## The less loaded of two, in place of round-robin
+
+Mike, 19 November, while the A/B above ran its first B (t2-r1173):
+"round robin is a shit algorithm, try using metric such as least
+loaded", then "yes, if you have queue length, use it".  The chain was
+stopped after t2-r1173 (its script killed, the run left to finish), and
+P is now the tip with `031dead35013f` "SUNRPC: Give each new task the
+less loaded of two transports" on `f5c0543b9f377`: each task gets the
+one with the smaller `queuelen` (the tasks bound to it) of two active
+transports picked at random from the switch's array.  Comparing all
+twelve would read every transport's `queuelen`, a line every task
+writes, twelve HITMs a choice; two choices read two and keep the most
+loaded transport near the average.  The shared cursor is no longer
+written.  W=1 clean on the client (`/root/zc-ckern/LL`, sunrpc
+`0914657C2DBA58D0D84B792`).
+
+`ab-rr.sh <PID>`: waits for t2-r1173's step, then P B P B P (t2-r1174
+to r1178), perf c2c on P (r1179), the WRITE and READ passes on P
+(r1180, r1181).
