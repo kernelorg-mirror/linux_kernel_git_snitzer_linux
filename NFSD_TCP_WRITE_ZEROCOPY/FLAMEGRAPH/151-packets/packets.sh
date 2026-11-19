@@ -11,7 +11,8 @@
 # /proc/softirqs, the RPC and READ counts; since round 152 also
 # /proc/net/softnet_stat and NET_RX split between the CPUs that host the
 # NIC's vectors, "ring", and the rest, "other": packets processed, RPS
-# IPIs received, squeezes).  Only reads; into
+# IPIs received, squeezes); since round 153 each server ring's received
+# frames a second.  Only reads; into
 # $L/t2-r<n>/: pk-{srv,cli}-{0,1}.txt and packets.txt.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
@@ -29,6 +30,7 @@ SNAP='snap() {
 	R=$(for i in $(awk -v p="$2" "NR>1 && \$NF ~ p { sub(\":\", \"\", \$1); print \$1 }" /proc/interrupts); do cat /proc/irq/$i/effective_affinity_list; done | tr "\n" ,)
 	RING="BEGIN { n = split(r, a, \",\"); for (k = 1; k <= n; k++) { if (a[k] == \"\") continue; m = split(a[k], b, \"-\"); for (c = b[1]; c <= b[m]; c++) ring[c] = 1 } }"
 	awk -v r="$R" "$RING { c = strtonum(\"0x\" \$13); g = (c in ring) ? \"ring\" : \"other\"; p[g] += strtonum(\"0x\" \$1); q[g] += strtonum(\"0x\" \$10); s[g] += strtonum(\"0x\" \$3); nc[g]++ } END { for (g in p) print \"softnet_processed_\" g, p[g]; for (g in q) print \"softnet_rps_ipis_\" g, q[g]; for (g in s) print \"softnet_squeeze_\" g, s[g]; for (g in nc) print \"cpus_\" g, nc[g] }" /proc/net/softnet_stat
+	for i in $1; do ethtool -S $i 2>/dev/null | awk -F: -v i=$i "/ring_[0-9]+_rx_packets/ { n = \$1; gsub(/[ a-z_]/, \"\", n); v = \$2; gsub(/ /, \"\", v); print \"ringrx_\" i \"_\" n, v }"; done
 	awk -v r="$R" "$RING /NET_RX/ { for (k = 2; k <= NF; k++) { g = ((k - 2) in ring) ? \"ring\" : \"other\"; s[g] += \$k } } END { for (g in s) print \"softirq_NET_RX_\" g, s[g] }" /proc/softirqs
 }'
 (
@@ -44,4 +46,9 @@ SNAP='snap() {
 ./settled-iops.sh run ../FLAMEGRAPH/108-4k-randread/nfs4k.sh $n:$q; rc=$?
 wait
 awk -f $P/packets.awk $O/pk-srv-0.txt $O/pk-srv-1.txt $O/pk-cli-0.txt $O/pk-cli-1.txt | tee $O/packets.txt
+# Since round 153: each server ring's received frames a second (xeu's own
+# ring counters; the windows are 8 s apart)
+join <(grep ^ringrx_ $O/pk-srv-0.txt | sort) <(grep ^ringrx_ $O/pk-srv-1.txt | sort) |
+	awk '{ split($1, a, "_"); r[a[2]] = r[a[2]] sprintf(" %dK", ($3 - $2) / 8000); t[a[2]] += ($3 - $2) / 8 }
+	     END { for (p in r) printf "ring rx/s %s:%s, %.2f M\n", p, r[p], t[p] / 1e6 }' | sort | tee -a $O/packets.txt
 exit $rc

@@ -41,3 +41,26 @@ The rig: `settled.sh` holds `tx_in_rx_napi` N (not held on an xeu
 without it), audits more than four rings at ring-irqs.sh's layout, and
 takes `EXP_XEU_RELEASE` for an xeu not installed from its RPM;
 `port-setup.sh` takes `EXP_RINGS`.
+
+## The first runs, and the change of plan (19 November, evening)
+
+| run | arm | IOPS | a / b M | p99 ms a / b | server us a READ | client us a READ |
+|---|---|---|---|---|---|---|
+| `t2-r1202` | B | refused by the audit (`xeu_release`, fixed) | | | | |
+| `t2-r1203` | B | 3.36 M | 1.53 / 1.83 | 8.36 / 5.08 | 16.0 | 11.6 |
+| `t2-r1204` | R8 | (below) | | | | |
+
+t2-r1203's B was no control (Mike: "B is the control run?  meaning no
+change, just using settled settings"): Release 18 loaded at
+`num_rings=8` and cut to 4 rings, and port a carried 1.53 M against port
+b's 1.83 M (Mike: "please fix the rings.. cannot have such imbalance").
+In t2-r1204 (8 rings) every ring of both ports took 159K to 215K frames
+a second, port a 1.54 M and port b 1.61 M: the 128 entries `ethtool -x`
+shows are only part of the table the card uses (they name rings 0 to 3
+only, and rings 4 to 7 receive all the same), so the table is not
+written with `ethtool -X`.
+
+`ab-pair2.sh` continues: P R8 P on this load (t2-r1205 to r1207), then
+Release 17 back at `num_rings=4` and B twice on the plain settled
+setting (t2-r1208, r1209).  `packets.sh` now prints each server ring's
+frames a second, so every run shows the spread over rings and ports.
