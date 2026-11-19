@@ -1915,7 +1915,12 @@ static int nfs_check_inode_attributes(struct inode *inode, struct nfs_fattr *fat
 	return 0;
 }
 
-static atomic_long_t nfs_attr_generation_counter;
+/*
+ * Written by every attribute update on every CPU: on a line of its own,
+ * so that the read-mostly data beside it (nfsiod_workqueue, read on
+ * every I/O) is not taken from each CPU with it.
+ */
+static atomic_long_t nfs_attr_generation_counter ____cacheline_aligned_in_smp;
 
 static unsigned long nfs_read_attr_generation_counter(void)
 {
