@@ -70,3 +70,36 @@ named nfsd), its work CPU, where its work item last ran, its
 `SVC_RTC_THREAD_CALLS` flag (its calls sent to threads) and its
 addresses.  `conn.awk` gives a line a connection and which took the
 thread path.  `placement.sh 1218 1219`.
+
+## Round 156's result: every connection on rtc; a moved one stays behind
+
+| run | IOPS | a / b M | p99 ms a / b | server busy | server us a READ | client us a READ | rebalanced | placed on 8-55 at s5 / s15 / s25 | undiverted | through threads (2 s) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `t2-r1218` | 3.04 M | 1.52 / 1.51 | 9.37 / 9.37 | 72% | 15.16 | 11.84 | 9 | 82 / 91 / 91 | 490 | 0 of 96 |
+| `t2-r1219` | 3.31 M | 1.77 / 1.54 | 3.23 / 7.31 | 78% | 15.08 | 11.60 | 3 | 79 / 89 / 96 | 488 | 0 of 96 |
+
+- **The rtc path takes every connection:** all 96 ran through their work
+  items, none through threads; 488 to 490 calls undiverted against 56
+  to 59 million diverted.  `fallback_partial` is 2 to 3% of the calls.
+  The 1.6 billion undiverted since boot were the WRITE runs'.
+- **A moved connection's work item stays on its old CPU.**  In
+  t2-r1218 the rebalancer moved five connections off CPU 10 to CPUs 36
+  and 37 (`conn->cpu`), and `conn.bt` saw all five still run on CPU 10,
+  each at 7,906 calls a second against 25,000 to 36,000 for the others:
+  six connections on one CPU, CPU 36 counted at four connections and 27%
+  busy.  A work item queued while it runs is queued where it runs (the
+  workqueue never runs one on two CPUs at once), and a busy connection's
+  is kicked again before each pass ends, so `queue_work_on()` to the new
+  CPU never takes.  The rebalancer counts the move as made, finds CPU
+  10 the busiest still, and moves another: the more moves, the worse
+  the run (t2-r1216 2 moves, 3.49 M; t2-r1219 3, 3.31 M; t2-r1217 4,
+  3.44 M; t2-r1218 9, 3.04 M).
+- **The fix (Mike, 19 November: "yes, fix the work item migration in
+  sunrpc, use a Fixes tag in a new commit"):** `cae2f2ea2e5b1`, "SUNRPC:
+  Run a moved rtc connection's work item on its new CPU", `Fixes:
+  4c084f9754fe1`.  Each connection has a second work item; a pass on the
+  wrong CPU does no work, makes the other one active and queues it, not
+  running anywhere, on the connection's CPU.  `svc_xprt.o` builds at W=1
+  with no warning.  To run it, the server's stack is rebuilt
+  (`build-svcstack.sh`: the struct change re-versions sunrpc's exports)
+  and swapped in, then the WRITE and READ passes and placement runs.
