@@ -273,3 +273,13 @@ backed up (t2-r809), so the recycled pages, not the send, were the
 cause; why the NIC drains recycled pages more slowly was not found.
 `0024`'s message names the small tail skbs as the cause: the chain
 removed those (t2-r793) and the backup stayed, so that message is wrong.
+
+**`0025` and `0026`, dropped 19 November (Mike: "revert both commits
+from the tip, but do so just by lessons learned, No code changes at
+all"): completing a reply in the receive worker that matched it**
+(FLAMEGRAPH rounds 140 and 141; `83b22f44df786` and `f58af467a2ad5`,
+kept on `kernel-7.3/canary.pre-drop-recv-complete`).  They took the
+wait after a reply's match (183 us in rpciod's queue on the same
+CPU) down to 17 us, and saved nothing: 3.46 M IOPS on both arms
+over three pairs, the client's CPU a READ the same.  The lessons are
+in `FLAMEGRAPH/141-recv-run-ok/README.md`, "Lessons learned".

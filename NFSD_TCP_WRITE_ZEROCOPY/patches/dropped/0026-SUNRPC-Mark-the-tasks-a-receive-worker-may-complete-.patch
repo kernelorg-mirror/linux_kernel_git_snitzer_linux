@@ -1,0 +1,118 @@
+From f58af467a2ad5d8fbba3d49e491d79611f3cff8e Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Thu, 19 Nov 2026 06:21:17 +0000
+Subject: [PATCH 26/26] SUNRPC: Mark the tasks a receive worker may complete on
+ its own
+
+Completing a reply in the receive worker that matched it was gated on
+RPC_TASK_INLINE_OK, which also lets a task's first leg run in its
+submitter.  NFS leaves that flag off for a NOWAIT O_DIRECT pgio, whose
+submitter must not block, so READs from io_uring, all NOWAIT, never
+took the new path.
+
+Give the completion its own mark: rpc_task_setup's recv_run_ok, kept in
+the task as tk_recv_run_ok in the spare bits beside tk_priority, since
+tk_flags has none left.  NFS sets it for every O_DIRECT pgio and commit,
+NOWAIT or not: the callbacks that run at completion are the same either
+way, and only the submitter is kept from blocking.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ fs/nfs/pagelist.c            | 7 +++++++
+ fs/nfs/write.c               | 4 +++-
+ include/linux/sunrpc/sched.h | 9 ++++++++-
+ net/sunrpc/sched.c           | 7 ++++---
+ 4 files changed, 22 insertions(+), 5 deletions(-)
+
+diff --git a/fs/nfs/pagelist.c b/fs/nfs/pagelist.c
+index 29f0f56376f85..58b24c5bbbe26 100644
+--- a/fs/nfs/pagelist.c
++++ b/fs/nfs/pagelist.c
+@@ -900,6 +900,13 @@ int nfs_initiate_pgio(struct rpc_clnt *clnt, struct nfs_pgio_header *hdr,
+ 	 */
+ 	if (hdr->dreq && !test_bit(NFS_IOHDR_NOWAIT, &hdr->flags))
+ 		task_setup_data.flags |= RPC_TASK_INLINE_OK;
++	/*
++	 * Its completion may run in the receive worker that matched its
++	 * reply, NOWAIT or not: the callbacks are the same, and only the
++	 * submitter is kept from blocking.
++	 */
++	if (hdr->dreq)
++		task_setup_data.recv_run_ok = true;
+ 	task = rpc_run_task(&task_setup_data);
+ 	if (IS_ERR(task)) {
+ 		if (test_bit(NFS_IOHDR_NOWAIT, &hdr->flags)) {
+diff --git a/fs/nfs/write.c b/fs/nfs/write.c
+index 2a61f99b5fd05..d7f3b074bd342 100644
+--- a/fs/nfs/write.c
++++ b/fs/nfs/write.c
+@@ -1731,8 +1731,10 @@ int nfs_initiate_commit(struct rpc_clnt *clnt, struct nfs_commit_data *data,
+ 	if (nfs_server_capable(data->inode, NFS_CAP_MOVEABLE))
+ 		task_setup_data.flags |= RPC_TASK_MOVEABLE;
+ 	/* O_DIRECT commits only, as in nfs_initiate_pgio() */
+-	if (data->dreq)
++	if (data->dreq) {
+ 		task_setup_data.flags |= RPC_TASK_INLINE_OK;
++		task_setup_data.recv_run_ok = true;
++	}
+ 
+ 	/* Set up the initial task struct.  */
+ 	nfs_ops->commit_setup(data, &msg, &task_setup_data.rpc_client);
+diff --git a/include/linux/sunrpc/sched.h b/include/linux/sunrpc/sched.h
+index 6c54185463bbc..ae050ae155ffa 100644
+--- a/include/linux/sunrpc/sched.h
++++ b/include/linux/sunrpc/sched.h
+@@ -98,7 +98,8 @@ struct rpc_task {
+ 	unsigned short		tk_pid;		/* debugging aid */
+ 	unsigned char		tk_priority : 2,/* Task priority */
+ 				tk_garb_retry : 2,
+-				tk_cred_retry : 2;
++				tk_cred_retry : 2,
++				tk_recv_run_ok : 1; /* setup's recv_run_ok */
+ 	unsigned char		tk_shard;	/* index of the tk_task shard */
+ };
+ 
+@@ -122,6 +123,12 @@ struct rpc_task_setup {
+ 	struct workqueue_struct *workqueue;
+ 	unsigned short flags;
+ 	signed char priority;
++	/*
++	 * The task's callbacks may run in the transport's receive worker
++	 * once its reply is in: they take no lock the receive worker
++	 * holds, and never block on the submitter.
++	 */
++	bool recv_run_ok;
+ };
+ 
+ /*
+diff --git a/net/sunrpc/sched.c b/net/sunrpc/sched.c
+index dfd5243bae02e..4ee75c599be71 100644
+--- a/net/sunrpc/sched.c
++++ b/net/sunrpc/sched.c
+@@ -568,12 +568,12 @@ EXPORT_SYMBOL_GPL(rpc_wake_up_queued_task);
+ /*
+  * May a task woken by a transport's receive worker run in that worker,
+  * once it has let go of the socket, instead of on rpciod?  Only an async
+- * task whose submitter audited its callbacks to run outside rpciod
+- * (RPC_TASK_INLINE_OK), and not on a TLS transport, as for its first leg.
++ * task whose submitter set rpc_task_setup's recv_run_ok, and not on a
++ * TLS transport.
+  */
+ static bool rpc_task_defer_ok(const struct rpc_task *task)
+ {
+-	if (!RPC_IS_ASYNC(task) || !(task->tk_flags & RPC_TASK_INLINE_OK) ||
++	if (!RPC_IS_ASYNC(task) || !task->tk_recv_run_ok ||
+ 	    RPC_IS_SWAPPER(task))
+ 		return false;
+ 	return !task->tk_client ||
+@@ -1307,6 +1307,7 @@ static void rpc_init_task(struct rpc_task *task, const struct rpc_task_setup *ta
+ 	INIT_LIST_HEAD(&task->tk_task);
+ 
+ 	task->tk_priority = task_setup_data->priority - RPC_PRIORITY_LOW;
++	task->tk_recv_run_ok = task_setup_data->recv_run_ok;
+ 	task->tk_owner = current->tgid;
+ 
+ 	/* Initialize workqueue for async tasks */
+-- 
+2.52.0
+

@@ -1,0 +1,260 @@
+From 83b22f44df7868d824ed05448462696c76f09ce1 Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@kernel.org>
+Date: Thu, 19 Nov 2026 01:14:03 +0000
+Subject: [PATCH 25/26] SUNRPC: Complete a reply in the receive worker that
+ matched it
+
+When a TCP transport's receive worker has read a reply, it wakes the
+task, which queues the task's work on rpciod; with rpciod per CPU that
+is the receive worker's own CPU, so the task waits there until the
+receive worker yields and then runs on a second pass through a
+workqueue.  With 4 KiB random READs at 3.5 M a second on a 48-CPU
+client, a READ waited 183 us between its reply being matched and its
+completion, all of it on that CPU: 14% of its 1.35 ms.
+
+Let the receive worker run such a task itself.  The reply's wakeup puts
+the task on the transport's recv_done list instead of queueing it, and
+the worker runs the list after each record it reads, with recv_mutex
+let go, since a task's next step may close the socket, which takes
+recv_mutex.  Only async tasks whose submitter marked them
+RPC_TASK_INLINE_OK, audited to run outside rpciod, are run so, and not
+on a TLS transport; every other task is queued as before.
+
+Signed-off-by: Mike Snitzer <snitzer@kernel.org>
+---
+ include/linux/sunrpc/xprtsock.h |  1 +
+ net/sunrpc/sched.c              | 64 +++++++++++++++++++++++++++++++++
+ net/sunrpc/sunrpc.h             |  8 +++++
+ net/sunrpc/xprt.c               | 29 +++++++++++++--
+ net/sunrpc/xprtsock.c           | 29 ++++++++++++++-
+ 5 files changed, 128 insertions(+), 3 deletions(-)
+
+diff --git a/include/linux/sunrpc/xprtsock.h b/include/linux/sunrpc/xprtsock.h
+index 700a1e6c047c0..cc95bd386d558 100644
+--- a/include/linux/sunrpc/xprtsock.h
++++ b/include/linux/sunrpc/xprtsock.h
+@@ -57,6 +57,7 @@ struct sock_xprt {
+ 	struct work_struct	error_worker;
+ 	struct work_struct	recv_worker;
+ 	struct mutex		recv_mutex;
++	struct list_head	recv_done;	/* woken, run after recv_mutex */
+ 	struct completion	handshake_done;
+ 	struct sockaddr_storage	srcaddr;
+ 	unsigned short		srcport;
+diff --git a/net/sunrpc/sched.c b/net/sunrpc/sched.c
+index b47abf6948d1e..dfd5243bae02e 100644
+--- a/net/sunrpc/sched.c
++++ b/net/sunrpc/sched.c
+@@ -565,6 +565,70 @@ void rpc_wake_up_queued_task(struct rpc_wait_queue *queue, struct rpc_task *task
+ }
+ EXPORT_SYMBOL_GPL(rpc_wake_up_queued_task);
+ 
++/*
++ * May a task woken by a transport's receive worker run in that worker,
++ * once it has let go of the socket, instead of on rpciod?  Only an async
++ * task whose submitter audited its callbacks to run outside rpciod
++ * (RPC_TASK_INLINE_OK), and not on a TLS transport, as for its first leg.
++ */
++static bool rpc_task_defer_ok(const struct rpc_task *task)
++{
++	if (!RPC_IS_ASYNC(task) || !(task->tk_flags & RPC_TASK_INLINE_OK) ||
++	    RPC_IS_SWAPPER(task))
++		return false;
++	return !task->tk_client ||
++	       task->tk_client->cl_xprtsec.policy == RPC_XPRTSEC_NONE;
++}
++
++/**
++ * rpc_wake_up_queued_task_defer - wake a task, to be run by the waker
++ * @queue: wait queue
++ * @task: task to be woken up
++ * @done: list the waker runs with rpc_run_deferred()
++ *
++ * As rpc_wake_up_queued_task(), but a task that rpc_task_defer_ok()
++ * allows is put on @done to run in the waker's context instead of being
++ * queued on rpciod.  The caller holds no lock that @task's callbacks may
++ * take when it later calls rpc_run_deferred().
++ */
++void rpc_wake_up_queued_task_defer(struct rpc_wait_queue *queue,
++				   struct rpc_task *task,
++				   struct list_head *done)
++{
++	if (!RPC_IS_QUEUED(task))
++		return;
++	if (!rpc_task_defer_ok(task)) {
++		rpc_wake_up_queued_task(queue, task);
++		return;
++	}
++	spin_lock(&queue->lock);
++	if (RPC_IS_QUEUED(task) && task->tk_waitqueue == queue &&
++	    RPC_IS_ACTIVATED(task)) {
++		trace_rpc_task_wakeup(task, queue);
++		__rpc_remove_wait_queue(queue, task);
++		rpc_clear_queued(task);
++		if (!rpc_test_and_set_running(task)) {
++			INIT_WORK(&task->u.tk_work, rpc_async_schedule);
++			list_add_tail(&task->u.tk_work.entry, done);
++		}
++	}
++	spin_unlock(&queue->lock);
++}
++
++/**
++ * rpc_run_deferred - run the tasks rpc_wake_up_queued_task_defer() woke
++ * @done: their list, emptied
++ */
++void rpc_run_deferred(struct list_head *done)
++{
++	struct work_struct *work, *next;
++
++	list_for_each_entry_safe(work, next, done, entry) {
++		list_del_init(&work->entry);
++		rpc_async_schedule(work);
++	}
++}
++
+ static bool rpc_task_action_set_status(struct rpc_task *task, void *status)
+ {
+ 	task->tk_status = *(int *)status;
+diff --git a/net/sunrpc/sunrpc.h b/net/sunrpc/sunrpc.h
+index b57fcba1caacb..a9149c4c64620 100644
+--- a/net/sunrpc/sunrpc.h
++++ b/net/sunrpc/sunrpc.h
+@@ -54,4 +54,12 @@ struct rpc_stat;
+ struct rpc_program;
+ void rpc_stat_alloc_version(struct rpc_stat *statp,
+ 			    const struct rpc_program *program, u32 vers);
++struct rpc_task;
++struct rpc_wait_queue;
++void rpc_wake_up_queued_task_defer(struct rpc_wait_queue *queue,
++				   struct rpc_task *task,
++				   struct list_head *done);
++void rpc_run_deferred(struct list_head *done);
++void xprt_complete_rqst_defer(struct rpc_task *task, int copied,
++			      struct list_head *done);
+ #endif /* _NET_SUNRPC_SUNRPC_H */
+diff --git a/net/sunrpc/xprt.c b/net/sunrpc/xprt.c
+index b6cafe3e34e9a..44a55400f2e26 100644
+--- a/net/sunrpc/xprt.c
++++ b/net/sunrpc/xprt.c
+@@ -1216,7 +1216,7 @@ EXPORT_SYMBOL_GPL(xprt_update_rtt);
+  *
+  * Caller holds xprt->queue_lock.
+  */
+-void xprt_complete_rqst(struct rpc_task *task, int copied)
++static void xprt_complete_rqst_locked(struct rpc_task *task, int copied)
+ {
+ 	struct rpc_rqst *req = task->tk_rqstp;
+ 	struct rpc_xprt *xprt = req->rq_xprt;
+@@ -1231,10 +1231,35 @@ void xprt_complete_rqst(struct rpc_task *task, int copied)
+ 	smp_wmb();
+ 	WRITE_ONCE(req->rq_reply_bytes_recvd, copied);
+ 	xprt_request_dequeue_receive_locked(task);
+-	rpc_wake_up_queued_task(&xprt->pending, task);
++}
++
++void xprt_complete_rqst(struct rpc_task *task, int copied)
++{
++	xprt_complete_rqst_locked(task, copied);
++	rpc_wake_up_queued_task(&task->tk_rqstp->rq_xprt->pending, task);
+ }
+ EXPORT_SYMBOL_GPL(xprt_complete_rqst);
+ 
++/**
++ * xprt_complete_rqst_defer - as xprt_complete_rqst(), run by the receiver
++ * @task: RPC request that recently completed
++ * @copied: actual number of bytes received from the transport
++ * @done: list of tasks the receiver runs with rpc_run_deferred()
++ *
++ * Caller holds xprt->queue_lock.  A task that may run outside rpciod is
++ * put on @done instead of being queued there, so that the receive worker
++ * that matched the reply completes it on its own CPU without another
++ * pass through a workqueue.
++ */
++void xprt_complete_rqst_defer(struct rpc_task *task, int copied,
++			      struct list_head *done)
++{
++	struct rpc_xprt *xprt = task->tk_rqstp->rq_xprt;
++
++	xprt_complete_rqst_locked(task, copied);
++	rpc_wake_up_queued_task_defer(&xprt->pending, task, done);
++}
++
+ static void xprt_timer(struct rpc_task *task)
+ {
+ 	struct rpc_rqst *req = task->tk_rqstp;
+diff --git a/net/sunrpc/xprtsock.c b/net/sunrpc/xprtsock.c
+index ded9c751c708d..416f946d91812 100644
+--- a/net/sunrpc/xprtsock.c
++++ b/net/sunrpc/xprtsock.c
+@@ -687,7 +687,8 @@ xs_read_stream_reply(struct sock_xprt *transport, struct msghdr *msg, int flags)
+ 
+ 	spin_lock(&xprt->queue_lock);
+ 	if (msg->msg_flags & (MSG_EOR|MSG_TRUNC))
+-		xprt_complete_rqst(req->rq_task, transport->recv.copied);
++		xprt_complete_rqst_defer(req->rq_task, transport->recv.copied,
++					 &transport->recv_done);
+ 	else
+ 		req->rq_private_buf.len = transport->recv.copied;
+ 	xprt_unpin_rqst(req);
+@@ -784,16 +785,39 @@ static void xs_poll_check_readable(struct sock_xprt *transport)
+ 		queue_work(xprtiod_workqueue, &transport->recv_worker);
+ }
+ 
++/*
++ * Run the tasks whose replies were just read, here and with recv_mutex
++ * let go: a task's next step may close the socket (xprt_connect() calls
++ * ->close when XPRT_CLOSE_WAIT is set), which takes recv_mutex.
++ */
++static bool xs_stream_run_done(struct sock_xprt *transport)
++{
++	LIST_HEAD(done);
++
++	if (list_empty(&transport->recv_done))
++		return true;
++	list_splice_init(&transport->recv_done, &done);
++	mutex_unlock(&transport->recv_mutex);
++	rpc_run_deferred(&done);
++	mutex_lock(&transport->recv_mutex);
++	return transport->sock != NULL;
++}
++
+ static void xs_stream_data_receive(struct sock_xprt *transport)
+ {
+ 	size_t read = 0;
+ 	ssize_t ret = 0;
++	LIST_HEAD(done);
+ 
+ 	mutex_lock(&transport->recv_mutex);
+ 	if (transport->sock == NULL)
+ 		goto out;
+ 	for (;;) {
+ 		ret = xs_read_stream(transport, MSG_DONTWAIT);
++		if (!xs_stream_run_done(transport)) {
++			ret = -ESHUTDOWN;
++			goto out;
++		}
+ 		if (ret < 0)
+ 			break;
+ 		read += ret;
+@@ -806,7 +830,9 @@ static void xs_stream_data_receive(struct sock_xprt *transport)
+ 	else
+ 		xs_poll_check_readable(transport);
+ out:
++	list_splice_init(&transport->recv_done, &done);
+ 	mutex_unlock(&transport->recv_mutex);
++	rpc_run_deferred(&done);
+ 	trace_xs_stream_read_data(&transport->xprt, ret, read);
+ }
+ 
+@@ -3207,6 +3233,7 @@ static struct rpc_xprt *xs_setup_xprt(struct xprt_create *args,
+ 
+ 	new = container_of(xprt, struct sock_xprt, xprt);
+ 	mutex_init(&new->recv_mutex);
++	INIT_LIST_HEAD(&new->recv_done);
+ 	memcpy(&xprt->addr, args->dstaddr, args->addrlen);
+ 	xprt->addrlen = args->addrlen;
+ 	if (args->srcaddr)
+-- 
+2.52.0
+

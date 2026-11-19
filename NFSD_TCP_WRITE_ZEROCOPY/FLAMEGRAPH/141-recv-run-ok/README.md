@@ -54,3 +54,40 @@ The trace on P (t2-r1151, 3.53 M), against round 139's on B (t2-r1137):
   **83.13 GB/s PASS** (io_uring, so on the new path), no new kernel
   warning.  The client back on its `updates/` stack and the settled
   setting after.
+
+## Dropped, and the lessons learned
+
+Mike, 19 November: "revert both commits from the tip, but do so just
+by lessons learned, No code changes at all".  Both code commits,
+`83b22f44df786` (round 140) and `f58af467a2ad5` (round 141), are
+dropped from the history, not reverted: the four docs commits of the
+two rounds replayed on `54f75cd5120bd`, so the code is round 139's
+again.  The tip before is `kernel-7.3/canary.pre-drop-recv-complete`,
+and the two are `patches/dropped/0025` and `0026`.  The client stays on
+its `updates/` stack, which never had them.
+
+1. **A wait is not a cost when the CPUs are the limit.**  The trace's
+   183 us between a reply's match and its completion was a task queued
+   behind work its CPU had to do anyway.  With every client CPU 85 to
+   88% busy and 96 READs in flight, removing it moved the queue to the
+   send (+70 us before `xprt_transmit`) and left the rate where it was.
+   A latency in a trace raises IOPS only if it is CPU that comes off,
+   or if the CPUs are not all busy; read CPU a READ (busy x CPUs /
+   IOPS) beside any trace before acting on it.
+2. **Check that a change runs on the load before measuring it.**
+   Round 140 compared two stacks that did the same for every READ: the
+   gate was `RPC_TASK_INLINE_OK`, which NFS leaves off for a NOWAIT
+   O_DIRECT pgio, and io_uring submits every READ NOWAIT.  Its four
+   IOPS runs measured the drives.  A trace or a counter of the new path
+   belongs in the first run, not after the A/B.
+3. **The drives decide a 4 KiB A/B as often as the code.**  Each long
+   tail in rounds 140 and 141 (p99 6 to 8.5 ms against 3.4) came with
+   one port's drives uneven (1.1 to 2.1 GB/s each), on either arm.
+   Read `drives.txt` before reading a tail, and run pairs enough to see
+   past it (three here).
+4. **`tk_flags` is full**: its 16 bits are all taken, so a new per-task
+   mark goes in the bits beside `tk_priority` (two spare) or widens the
+   field.
+5. **What is left for IOPS is client CPU a READ** (11.8 to 11.9 us): the
+   locks (about 7% in round 137), the per-READ setup (7%), the
+   round-robin's iteration (2.4%).
