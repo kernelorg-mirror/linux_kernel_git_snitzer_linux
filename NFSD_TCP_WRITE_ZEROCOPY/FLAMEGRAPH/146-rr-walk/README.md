@@ -39,3 +39,8 @@ written.  W=1 clean on the client (`/root/zc-ckern/LL`, sunrpc
 `ab-rr.sh <PID>`: waits for t2-r1173's step, then P B P B P (t2-r1174
 to r1178), perf c2c on P (r1179), the WRITE and READ passes on P
 (r1180, r1181).
+
+**t2-r1180, P's WRITE pass: 75.76 GB/s, RERUN** (port a 37.09 GB/s,
+p99 228 ms; port b 38.67, 98 ms; round 145's t2-r1171 39.05 / 38.92 at
+81 / 84 ms).  `write-again.sh`, after round 147's run: P's second WRITE
+pass (t2-r1183), then B's (t2-r1184) on drives in the same state.
