@@ -31,3 +31,29 @@ reverts `219a15abdd219` and the rebalancer's use of the spill CPUs from
 `4c084f9754fe1`; `svc_xprt.o` builds at W=1 with no warning.  tardis2's
 sunrpc still has the two parameters, at none and weight 2, which is the
 same as not having them; this round runs on it.
+
+## Result: an even spread when every connection lands, four that did not
+
+`placement.sh 1215 1216`, then `1217`.  t2-r1215 failed at its start
+(no load, exit 1): `settled.sh` was rewritten while the run used it
+("bad interpreter: Text file busy").  t2-r1217 replaces it.
+
+| run | IOPS | a / b M | p99 ms a / b | server busy | server us a READ | client us a READ | placed on 8-55, steady | CPUs with 1 / 2 | busy, 1 / 2 connections | rebalanced |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `t2-r1216` | 3.49 M | 1.78 / 1.71 | 3.33 / 3.98 | 80% | 14.67 | 11.28 | 96 (+4 off) | 0 / 48 | - / 98% | 2 |
+| `t2-r1217` | 3.44 M | 1.83 / 1.61 | 3.13 / 5.60 | 80% | 14.88 | 11.44 | 92 (+3 to 4 off) | 4 / 44 | 69% / 98% | 4 |
+
+- **When every connection lands, the spread is exact:** from about the
+  15th second, t2-r1216 held two connections on each of nfsd's 48 CPUs,
+  after two moves; all 48 ran 98% busy.
+- **In t2-r1217 four connections were never placed on nfsd's CPUs** for
+  the whole run (96 placed in all against t2-r1216's 100).  Four CPUs
+  (8, 45, 46, 47) held one connection and ran 69% busy; the four
+  connections' work ran some other way, and port b fell behind.  The
+  rebalancer moves placed connections only, so it cannot help.
+- **Some calls do not take the rtc path at all:** since boot, `rtc_stats`
+  counts 1.6 billion undiverted against 7.0 billion diverted, and
+  `fallback_partial` (244 million) is by far the largest fallback.  Per
+  run, and which connections, is round 156's to find.
+- **No spill, three runs (t2-r1212, r1216, r1217):** 14.42 to 14.88 us of
+  server CPU a READ, against 15.31 to 16.18 with it (round 154).
