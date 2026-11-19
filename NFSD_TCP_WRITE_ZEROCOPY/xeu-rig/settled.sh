@@ -352,6 +352,10 @@ declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_ind
 # four, and at Release 15's reload they ran the region dry for about 30 s
 # (alloc_fail 13).  Eight rings now take a reload.  Not held elsewhere.
 [ $HOST = tardis2 ] && XEU[num_rings]=4
+# tx_in_rx_napi (kmod-xsight Release 18, FLAMEGRAPH round 153): RX ring
+# i's poll reaps TX ring i's completions, one NAPI context a ring pair.
+# N, the driver's default; an xeu without it is not held to it.
+XEU[tx_in_rx_napi]=N
 XP=/sys/module/xeu/parameters/rx_prefetch
 XG=/sys/module/xeu/parameters/rx_gro_frags
 XR=/sys/module/xeu/parameters/rx_refill_mid
@@ -665,7 +669,10 @@ xeu_release() {	# the loaded xeu's kmod-xsight release, or why it cannot be told
 	local f; f=$(modinfo -n xeu 2>/dev/null) || { echo "no xeu"; return; }
 	[ "$(cat /sys/module/xeu/srcversion 2>/dev/null)" = "$(modinfo -F srcversion "$f")" ] ||
 		{ echo "loaded xeu is not $f"; return; }
-	rpm -qf --qf '%{RELEASE}\n' "$f" 2>/dev/null | head -1 | sed 's/\..*//'
+	# EXP_XEU_RELEASE: an xeu built from kernel-rpmtree's spec but not
+	# installed from its RPM (FLAMEGRAPH round 153's Release 18 in updates/)
+	rpm -qf --qf '%{RELEASE}\n' "$f" 2>/dev/null | head -1 | sed 's/\..*//' | grep . ||
+		{ [ -n "${EXP_XEU_RELEASE:-}" ] && echo "$EXP_XEU_RELEASE"; }
 }
 nfsd_cpus() {	# how many of nfsd's threads are allowed which CPUs
 	for t in $(pgrep -x nfsd); do taskset -cp $t 2> /dev/null | awk '{print $NF}'; done | sort | uniq -c | awk '{printf "%s%s on %s", (NR > 1 ? ", " : ""), $1, $2}'
@@ -748,6 +755,8 @@ mode_expect() {	# fill EXPECT[] and ENTRIES[] for a mode, EXP_* applied over it
 		[ -n "${!xv:-}" ] && [ "${!xv}" != "${XEU[$xk]}" ] && OFF="$OFF $xk=${!xv}"
 	done
 	[ -n "${EXP_LAYOUT:-}" ] && OFF="$OFF layout=$EXP_LAYOUT"
+	[ -n "${EXP_XEU_RELEASE:-}" ] && OFF="$OFF xeu_release=$EXP_XEU_RELEASE"
+	[ -n "${EXP_RINGS:-}" ] && [ "$EXP_RINGS" != "$RINGS" ] && OFF="$OFF rings=$EXP_RINGS"
 	[ -n "${EXP_QDISC:-}" ] && [ "$EXP_QDISC" != fq_codel ] && OFF="$OFF client_qdisc=$EXP_QDISC"
 	[ -n "${EXP_QDISC_A:-}" ] && [ "$EXP_QDISC_A" != fq_codel ] && OFF="$OFF client_qdisc_a=$EXP_QDISC_A"
 	[ -n "${EXP_QDISC_B:-}" ] && [ "$EXP_QDISC_B" != fq_codel ] && OFF="$OFF client_qdisc_b=$EXP_QDISC_B"
@@ -965,8 +974,9 @@ audit_port() {	# audit_port <a|b>
 	[ -n "${EXP_LAYOUT:-}" ] && { echo "  --   $d interrupts and XPS: not held ($EXP_LAYOUT)"; return; }
 	while read -r irq name; do
 		case "$name" in
-		$d-Rx-*) i=${name##*-}; want_cpu=$(( c0 + 2 * i )) ;;
-		$d-Tx-*) i=${name##*-}; want_cpu=$(( c0 + 2 * i + 1 )) ;;
+		# More than four rings: ring-irqs.sh puts Rx-i and Tx-i on c0 + i
+		$d-Rx-*) i=${name##*-}; [ ${EXP_RINGS:-$RINGS} -gt 4 ] && want_cpu=$(( c0 + i )) || want_cpu=$(( c0 + 2 * i )) ;;
+		$d-Tx-*) i=${name##*-}; [ ${EXP_RINGS:-$RINGS} -gt 4 ] && want_cpu=$(( c0 + i )) || want_cpu=$(( c0 + 2 * i + 1 )) ;;
 		$d-async) want_cpu=$(( c0 + 1 )) ;;	# with Tx-0
 		*) continue ;;
 		esac
@@ -1018,7 +1028,8 @@ audit() {
 	for k in $(printf '%s\n' "${!XEU[@]}" | sort); do
 		w=${XEU[$k]}; [ $k = rx_refill_thresh ] && w=${EXP_REFILL:-$w}
 		v=EXP_XEU_$k; w=${!v:-$w}
-		if [ $k = rx_refill_mid ] && [ "$w" = 0 ] && [ ! -e /sys/module/xeu/parameters/$k ]; then
+		if { { [ $k = rx_refill_mid ] && [ "$w" = 0 ]; } || { [ $k = tx_in_rx_napi ] && [ "$w" = N ]; }; } &&
+		   [ ! -e /sys/module/xeu/parameters/$k ]; then
 			printf '  --   %-34s %s\n' "xeu $k" "not in this xeu"
 			continue
 		fi
@@ -1071,8 +1082,8 @@ place() {	# place [a] [b]: the CPU layout of nfsd and of the ports named (both)
 	for t in $(pgrep -x nfsd); do taskset -pc $NFSD_CPUSET $t > /dev/null; done
 	for p in ${*:-$PORTS}; do
 		d=${PDEV[$p]:?port a or b}; c0=${PCPU[$p]}
-		[ "$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')" = $RINGS ] ||
-			{ echo "$d does not have $RINGS rings: port-setup.sh (bringup.sh for port a on a fresh boot)"; return 1; }
+		[ "$(ethtool -l $d | awk '/^Combined:/ {v = $2} END {print v}')" = ${EXP_RINGS:-$RINGS} ] ||
+			{ echo "$d does not have ${EXP_RINGS:-$RINGS} rings: port-setup.sh (bringup.sh for port a on a fresh boot)"; return 1; }
 		# The driver puts a port's interrupts, the async one too, back on
 		# CPUs 0-7 at every open; XPS, RPS and threading outlive an open
 		# but are set here all the same.

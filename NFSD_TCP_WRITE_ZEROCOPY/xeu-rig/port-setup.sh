@@ -11,7 +11,7 @@ pci=$(basename "$(readlink -f /sys/class/net/$d/device)")
 cur=$(cat $PP/rx_region_dev)
 ( sleep 300; ip link set $d up ) > /dev/null 2>&1 & DM=$!
 ip link set $d down
-ethtool -L $d combined 4
+ethtool -L $d combined ${EXP_RINGS:-4}	# EXP_RINGS: settled.sh's, for a run off the four
 case ",$cur," in *",$pci,"*) ;; *) echo "${cur:+$cur,}$pci" > $PP/rx_region_dev ;; esac
 ip link set $d mtu 7792
 ip link set $d up; sleep 5
