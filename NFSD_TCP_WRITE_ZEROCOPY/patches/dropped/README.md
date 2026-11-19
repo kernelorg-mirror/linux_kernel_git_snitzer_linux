@@ -300,3 +300,15 @@ by `queuelen`, of two transports picked at random** (FLAMEGRAPH round
 CPU a READ 11.27 against 11.42 us, inside the spread); the WRITE pass
 below the mark twice (t2-r1180 75.76 GB/s, port a 37.09 at p99 228 ms;
 t2-r1183 77.45).  The account is `FLAMEGRAPH/146-rr-walk/README.md`.
+
+**`0029`, dropped 19 November (Mike: "yes, drop Patch16 by rewriting
+kernel-rpmtree history"): xeu's Patch16, a TX ring's completions reaped
+in its RX ring's poll (`tx_in_rx_napi`), kmod-xsight Release 18**
+(FLAMEGRAPH round 153; kernel-rpmtree `081f549`, never pushed, kept on
+kernel-rpmtree's `main.pre-drop-xeu-pair`; `main` is back at
+`c638b62`, Release 17).  It worked (no TX poll ran in a 1 s trace) and
+halved the ring CPUs' softirqs at 8 rings, but saved no CPU: 15.75 us
+of server CPU a READ against 15.80 on Release 17 at the settled setting
+and 15.66 at 8 rings without it, inside the spread of one arm's runs.
+The polls it removes are cheap; the cost is the RFS hop to nfsd's CPUs.
+The account is `FLAMEGRAPH/153-xeu-pair/README.md`.

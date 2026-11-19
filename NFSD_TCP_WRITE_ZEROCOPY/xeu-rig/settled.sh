@@ -352,9 +352,10 @@ declare -A XEU=([rx_buf_size]=8192 [rx_ip_align]=2 [rx_refill_thresh]=8 [rss_ind
 # four, and at Release 15's reload they ran the region dry for about 30 s
 # (alloc_fail 13).  Eight rings now take a reload.  Not held elsewhere.
 [ $HOST = tardis2 ] && XEU[num_rings]=4
-# tx_in_rx_napi (kmod-xsight Release 18, FLAMEGRAPH round 153): RX ring
-# i's poll reaps TX ring i's completions, one NAPI context a ring pair.
-# N, the driver's default; an xeu without it is not held to it.
+# tx_in_rx_napi (kmod-xsight Release 18, FLAMEGRAPH round 153, dropped:
+# patches/dropped/0029): RX ring i's poll reaps TX ring i's completions,
+# one NAPI context a ring pair.  N, the driver's default; an xeu without
+# it, Release 17 and every kmod-xsight since the drop, is not held to it.
 XEU[tx_in_rx_napi]=N
 XP=/sys/module/xeu/parameters/rx_prefetch
 XG=/sys/module/xeu/parameters/rx_gro_frags

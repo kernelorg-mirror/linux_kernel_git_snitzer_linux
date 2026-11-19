@@ -106,3 +106,8 @@ more than runs of one arm differ from each other.
   0-7,56-63): round 154 tries no spill.
 - So xeu Patch16 (`tx_in_rx_napi`) and 8 rings are not kept for IOPS;
   Release 17 is back at `num_rings=4`, the settled setting.
+
+**Dropped (Mike, 19 November: "yes, drop Patch16 by rewriting
+kernel-rpmtree history"):** kernel-rpmtree's `081f549` (never pushed) is
+off `main`, which is back at `c638b62`, Release 17; the commit is kept
+on `main.pre-drop-xeu-pair` and as `patches/dropped/0029`.

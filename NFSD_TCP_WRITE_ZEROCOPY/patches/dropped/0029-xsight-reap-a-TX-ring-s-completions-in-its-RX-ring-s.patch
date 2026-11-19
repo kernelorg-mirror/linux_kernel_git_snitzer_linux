@@ -1,0 +1,279 @@
+From 081f54963e7a307b9a5a14f77ea1b567377e122e Mon Sep 17 00:00:00 2001
+From: Mike Snitzer <snitzer@hammerspace.com>
+Date: Thu, 19 Nov 2026 18:48:08 +0000
+Subject: [PATCH] xsight: reap a TX ring's completions in its RX ring's poll in
+ xeu
+
+kmod-xsight now applies Patch16,
+xeu-reap-a-TX-ring-s-completions-in-its-RX-ring-s-poll.patch.
+
+Each xeu ring pair has two NAPI contexts and two interrupts, on two
+CPUs, so an NFS server answering 4 KiB READs runs two polls on two
+CPUs for each exchange.  At 3.55 M READs a second, NET_RX ran 0.80
+times a READ on the server, each of the 16 contexts polled from its
+own deferral timer.
+
+With the new tx_in_rx_napi parameter (off by default, read when the
+port opens, needs irq_msix_mask), RX ring i's poll also reaps TX ring
+i's completions and TX ring i's interrupt schedules that poll: one
+poll on one CPU for both directions.  All seventeen patches apply in
+spec order and xeu builds against a 16K page kernel with no warning
+in xeu_drv.c at W=1.  Release 18.
+
+Signed-off-by: Mike Snitzer <snitzer@hammerspace.com>
+---
+ ...-s-completions-in-its-RX-ring-s-poll.patch | 220 ++++++++++++++++++
+ xsight/xsight.spec                            |   3 +-
+ 2 files changed, 222 insertions(+), 1 deletion(-)
+ create mode 100644 xsight/xeu-reap-a-TX-ring-s-completions-in-its-RX-ring-s-poll.patch
+
+diff --git a/xsight/xeu-reap-a-TX-ring-s-completions-in-its-RX-ring-s-poll.patch b/xsight/xeu-reap-a-TX-ring-s-completions-in-its-RX-ring-s-poll.patch
+new file mode 100644
+index 0000000..0870eef
+--- /dev/null
++++ b/xsight/xeu-reap-a-TX-ring-s-completions-in-its-RX-ring-s-poll.patch
+@@ -0,0 +1,220 @@
++Subject: [PATCH] xeu: reap a TX ring's completions in its RX ring's poll
++
++Each ring pair has two NAPI contexts and two interrupts, one for
++received frames and one for transmit completions, on two CPUs (RX ring
++i's vector on CPU 2i, TX ring i's on 2i + 1 by default).  A port that
++both receives and sends small messages, an NFS server answering 4 KiB
++READs, then runs two polls on two CPUs for each exchange: the request
++in, its reply's completion out.  On an arm64 NFS server at 3.55 M READs
++a second, NET_RX ran 0.80 times a READ with almost no interrupts, with
++NAPI's deferral polling each of the 16 contexts from its own timer.
++
++With tx_in_rx_napi set, the poll of RX ring i also reaps TX ring i's
++completions, with a budget of its own, as most drivers do; TX ring i's
++interrupt masks its own MSI-X entry and schedules that poll, which
++re-arms both entries when it completes.  One poll on one CPU serves
++both directions, the sent skbs are freed where the received ones were
++built, and with NAPI's deferral one timer runs where two did.  A TX
++vector paired this way defaults to its RX ring's CPU.
++
++The pairing needs irq_msix_mask's masking on both rings, since the
++poll re-arms a vector it did not hold off through the irq core; a pair
++without it keeps its two polls.  The parameter is read when the port
++opens and is off by default.
++---
++--- xeu-esdk-v2.0.1.orig/xeu_drv.c	2026-11-19 18:44:43.835540748 +0000
+++++ xeu-esdk-v2.0.1/xeu_drv.c	2026-11-19 18:47:20.114985896 +0000
++@@ -196,6 +196,24 @@
++ 		 "hold a ring's interrupt off while it polls by masking its MSI-X entry in the card, not through the irq core (default N; read when the port opens)");
++ 
++ /*
+++ * Each ring pair has two NAPI contexts and two interrupts, one for received
+++ * frames and one for transmit completions, so a port that both receives
+++ * and sends small messages runs two polls, and on two CPUs, for each
+++ * exchange: a request in, its reply's completion out.  With this set, the
+++ * poll of RX ring i also reaps TX ring i's completions, as most drivers do,
+++ * and TX ring i's interrupt schedules that poll instead of its own: one
+++ * poll on one CPU for both directions, the sent skbs freed where the
+++ * received ones were built, and, with NAPI's deferral, one timer instead
+++ * of two.  It needs irq_msix_mask's masking on both rings of the pair, so
+++ * that the poll can re-arm both; a pair without it keeps its two polls.
+++ * Read when the port opens.
+++ */
+++static bool tx_in_rx_napi;
+++module_param(tx_in_rx_napi, bool, 0644);
+++MODULE_PARM_DESC(tx_in_rx_napi,
+++		 "reap a TX ring's completions in the poll of the RX ring of the same index, one NAPI context for both (default N; needs irq_msix_mask; read when the port opens)");
+++
+++/*
++  * The first thing the poll reads of a received frame is its Ethernet
++  * header, in eth_type_trans(), and before that napi_build_skb() reads the
++  * buffer's struct page and clears the skb_shared_info at the buffer's
++@@ -291,6 +309,22 @@
++ 	return IRQ_HANDLED;
++ }
++ 
+++/*
+++ * tx_in_rx_napi: a TX ring's interrupt schedules its RX ring's poll, which
+++ * re-arms both when it completes.  The TX ring's own entry is masked here
+++ * whether or not this wins the schedule: if the poll is already running,
+++ * NAPI_STATE_MISSED makes it run again before it completes and re-arms.
+++ */
+++static irqreturn_t xeu_tx_pair_intr(int irq, void *arg)
+++{
+++	struct xeu_ring *ring = arg;
+++
+++	xeu_ring_irq_hold(ring);
+++	xeu_napi_kick(ring->pair);
+++
+++	return IRQ_HANDLED;
+++}
+++
++ static irqreturn_t xeu_async_ring_intr(int irq, void *arg)
++ {
++ 	struct xsl_async_state async_state;
++@@ -404,8 +438,26 @@
++ 		}
++ 	}
++ 
+++	/*
+++	 * The RX rings are set up first, so RX ring i's mask is known when TX
+++	 * ring i is paired with it.  The RX ring's poll can already run from
+++	 * its refill timer, and reads the pair once a poll.
+++	 */
+++	ring->pair = NULL;
+++	if (ring->type != RING_TYPE_ETH_RX) {
+++		struct xeu_ring *rx = &priv->rx_rings[ring->sw_ring_idx].base;
+++
+++		if (READ_ONCE(tx_in_rx_napi) && ring->msix_vc && rx->msix_vc) {
+++			ring->pair = rx;
+++			WRITE_ONCE(rx->pair, ring);
+++		} else if (READ_ONCE(tx_in_rx_napi)) {
+++			dev_warn(priv->dev, "ring %u: no MSI-X masking, tx_in_rx_napi not used\n",
+++				 ring->sw_ring_idx);
+++		}
+++	}
+++
++ 	rc = request_irq(ring->irq_vector,
++-			 xeu_napi_intr,
+++			 ring->pair ? xeu_tx_pair_intr : xeu_napi_intr,
++ 			 0,
++ 			 ring->irq_name,
++ 			 ring);
++@@ -545,7 +597,8 @@
++ 	/* Setup Tx rings irq */
++ 	for (tx_idx = 0; tx_idx < priv->num_rings; tx_idx++) {
++ 		ring = &priv->tx_rings[tx_idx].base;
++-		cpu = (tx_idx * 2 + 1) % active_cpus;
+++		/* Paired, its interrupt runs the RX ring's poll: the same CPU */
+++		cpu = (tx_idx * 2 + !READ_ONCE(tx_in_rx_napi)) % active_cpus;
++ 		irq_vector = pci_irq_vector(priv->pdev, ring->msix_table_entry);
++ 		rc = xeu_setup_io_ring_irq(ring,
++ 					irq_vector,
++@@ -1175,6 +1228,8 @@
++  *
++  * Return: Number of packets processed
++  */
+++static int xeu_tx_clean(struct xeu_ring *ring, int budget);
+++
++ static int xeu_rx_poll(struct napi_struct *napi, int budget)
++ {
++ 	u16 expected_vlan_id, rx_fill_cnt, sub_idx, error_status, hw_pkt_format;
++@@ -1188,6 +1243,7 @@
++ 	int csum_error_happen;
++ 	struct xeu_dev *priv;
++ 	struct sk_buff *skb;
+++	struct xeu_ring *tx;
++ 	int work_done = 0;
++ 	u32 refill_mid;
++ 	u8 num_desc;
++@@ -1388,11 +1444,21 @@
++ 		xeu_rx_refill_retry_if_short(rxr);
++ 	}
++ 
+++	/*
+++	 * tx_in_rx_napi: the TX ring's completions, with a budget of their
+++	 * own.  If they are not all reaped, the poll stays scheduled.
+++	 */
+++	tx = READ_ONCE(ring->pair);
+++	if (tx && xeu_tx_clean(tx, budget) >= budget)
+++		work_done = budget;
+++
++ 	if (work_done < budget) {
++ 		if (napi_complete_done(napi, work_done)) {
++ #ifdef XEU_POLL
++ 			ring->xeu_dev->interrupt_rx[ring->sw_ring_idx] = false;
++ #endif
+++			if (tx)
+++				xeu_ring_irq_rearm(tx);
++ 			xeu_ring_irq_rearm(ring);
++ 		}
++ 	}
++@@ -1401,22 +1467,23 @@
++ }
++ 
++ 
++-static int xeu_tx_poll(struct napi_struct *napi, int budget)
+++/*
+++ * Reap up to @budget of a TX ring's completions and wake its queue if it
+++ * was stopped for room; from the ring's own poll, or with tx_in_rx_napi
+++ * from its RX ring's.
+++ */
+++static int xeu_tx_clean(struct xeu_ring *ring, int budget)
++ {
++-	struct xeu_dev *priv = netdev_priv(napi->dev);
+++	struct xeu_dev *priv = netdev_priv(ring->dev);
+++	struct xeu_tx_ring *txr = container_of(ring, struct xeu_tx_ring, base);
++ 	struct xeu_sw_tx_desc *sw_tx_desc;
++ 	struct tx_cr_net_tx_desc *cmpl;
++-	struct xeu_tx_ring *txr;
++ 	unsigned int bytes = 0;
++ 	unsigned int pkts = 0;
++-	struct xeu_ring *ring;
++ 	int work_done = 0, i;
++ 	struct sk_buff *skb;
++ 	u8 num_desc;
++ 
++-	ring = container_of(napi, struct xeu_ring, napi);
++-	txr = container_of(ring, struct xeu_tx_ring, base);
++-
++ 	while ((work_done < budget)) {
++ 		if (!TX_CMPL_VALID(ring, ring->cr_cons_idx))
++ 			break;
++@@ -1463,13 +1530,21 @@
++ 			test_bit(XEU_FLAG_DEV_RDY, &priv->flags)) {
++ 				xeu_inc_stat_counter(&txr->stats_tx.tx_wake_q, &txr->stats_tx_sync);
++ 				netif_tx_wake_queue(txr->netdev_txq);
++-				netdev_dbg(napi->dev,
+++				netdev_dbg(ring->dev,
++ 					   "Tx Sub ring %u resumed\n",
++ 					   ring->sw_ring_idx);
++ 		}
++ 		__netif_tx_unlock(txr->netdev_txq);
++ 	}
++ 
+++	return work_done;
+++}
+++
+++static int xeu_tx_poll(struct napi_struct *napi, int budget)
+++{
+++	struct xeu_ring *ring = container_of(napi, struct xeu_ring, napi);
+++	int work_done = xeu_tx_clean(ring, budget);
+++
++ 	if (work_done < budget) {
++ 		if (napi_complete_done(napi, work_done)) {
++ 			netdev_dbg(napi->dev, "Rearm interrupt\n");
++--- xeu-esdk-v2.0.1.orig/xeu_ring.h	2026-11-19 18:44:43.828085539 +0000
+++++ xeu-esdk-v2.0.1/xeu_ring.h	2026-11-19 18:46:52.862977525 +0000
++@@ -227,6 +227,12 @@
++ 	 */
++ 	void __iomem *msix_vc;
++ 	u32 msix_ctrl;
+++	/*
+++	 * tx_in_rx_napi: an RX ring's TX ring of the same index, whose
+++	 * completions its poll reaps, and that TX ring's RX ring, whose poll
+++	 * its interrupt schedules.  NULL on both when they are not paired.
+++	 */
+++	struct xeu_ring *pair;
++ 	char irq_name[IRQ_NAME_SIZE];
++ 	/* Used for interrupt simulation - to be removed */
++ 	u16              sw_ring_idx;
+diff --git a/xsight/xsight.spec b/xsight/xsight.spec
+index 379c680..b29798a 100644
+--- a/xsight/xsight.spec
++++ b/xsight/xsight.spec
+@@ -65,7 +65,7 @@ Name:           kmod%{?kvariant:-%{kvariant}}-xsight
+ # expansion and sed rejects what is left.
+ %global _kmod_kver %(echo %{kversion} | sed -r 'y/-/_/; s/\.el[0-9_]+\.%{_arch}([+][[:alnum:]_]*)?$//;')
+ Version:        %{kmodver}_%{_kmod_kver}
+-Release:        17%{?dist}
++Release:        18%{?dist}
+ Summary:        Xsight Labs Drivers
+ 
+ License:        GPLv2
+@@ -100,6 +100,7 @@ Patch12:        xeu-refill-RX-rings-in-a-lean-loop.patch
+ Patch13:        xeu-hand-GRO-received-frames-as-page-fragments.patch
+ Patch14:        xeu-refill-an-RX-ring-in-the-middle-of-a-poll.patch
+ Patch15:        xeu-record-the-RX-queue-a-frame-arrived-on.patch
++Patch16:        xeu-reap-a-TX-ring-s-completions-in-its-RX-ring-s-poll.patch
+ 
+ BuildRequires:  gcc, make, elfutils-libelf-devel
+ 
+-- 
+2.52.0
+

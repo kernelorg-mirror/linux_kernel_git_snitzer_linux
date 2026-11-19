@@ -536,12 +536,14 @@ miss, 3.5% of them).  Every softirq on nfsd's CPUs is one of these IPIs.
    `kernel-rpmtree` `081f549`, Patch16
    `xeu-reap-a-TX-ring-s-completions-in-its-RX-ring-s-poll.patch`
    (Release 18, parameter `tx_in_rx_napi`, needs `irq_msix_mask`).
-   Built, not yet loaded; its A/B is FLAMEGRAPH round 153, with 8 rings
-   of 128 a port (the same buffers posted) so that each ring CPU keeps
-   one pair.  Question for Xsight: any reason the two must stay apart?
+   **Tried and dropped (FLAMEGRAPH round 153):** it worked (no TX poll
+   ran) and halved the ring CPUs' softirqs at 8 rings of 64, but saved
+   no CPU (15.75 us of server CPU a READ against 15.80 on Release 17),
+   and 8 rings alone saved none either (15.66).  The patch is
+   `patches/dropped/0029`; kernel-rpmtree is back at Release 17.  Not a
+   question for Xsight.
 
-**Decides.**  Questions 1 to 3 go in the next reply (X7).  The A/B of
-4 is ours, and an xeu reload is Mike's to authorize.
+**Decides.**  Questions 1 to 3 go in the next reply (X7).  4 is done.
 
 ### X7. The reply
 
