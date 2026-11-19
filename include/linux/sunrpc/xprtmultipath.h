@@ -11,6 +11,8 @@
 
 struct rpc_xprt_iter_ops;
 struct rpc_sysfs_xprt_switch;
+struct rpc_xprt_switch_array;
+
 struct rpc_xprt_switch {
 	spinlock_t		xps_lock;
 	struct kref		xps_kref;
@@ -21,6 +23,7 @@ struct rpc_xprt_switch {
 	unsigned int		xps_nunique_destaddr_xprts;
 	atomic_long_t		xps_queuelen;
 	struct list_head	xps_xprt_list;
+	struct rpc_xprt_switch_array __rcu *xps_array; /* the list's xprts */
 
 	struct net *		xps_net;
 

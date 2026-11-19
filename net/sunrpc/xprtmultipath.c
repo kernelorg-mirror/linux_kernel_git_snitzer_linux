@@ -29,6 +29,41 @@ static const struct rpc_xprt_iter_ops rpc_xprt_iter_roundrobin;
 static const struct rpc_xprt_iter_ops rpc_xprt_iter_listall;
 static const struct rpc_xprt_iter_ops rpc_xprt_iter_listoffline;
 
+/*
+ * The switch's transports in list order, for the round-robin choice: it
+ * finds the last transport used by its place here instead of by walking
+ * the list, which reads every transport's xprt_switch and state, lines
+ * each task writes on whichever CPU runs it.  Rebuilt under xps_lock at
+ * each change to the list and read under RCU; NULL when empty or when an
+ * allocation failed, and the choice then walks the list as before.
+ */
+struct rpc_xprt_switch_array {
+	struct rcu_head		rcu;
+	unsigned int		n;
+	struct rpc_xprt		*xprts[];
+};
+
+static void xprt_switch_rebuild_array(struct rpc_xprt_switch *xps)
+{
+	struct rpc_xprt_switch_array *new = NULL, *old;
+	struct rpc_xprt *pos;
+	unsigned int n = 0;
+
+	if (xps->xps_nxprts)
+		new = kmalloc_flex(*new, xprts, xps->xps_nxprts, GFP_ATOMIC);
+	if (new) {
+		list_for_each_entry(pos, &xps->xps_xprt_list, xprt_switch) {
+			if (n == xps->xps_nxprts)
+				break;
+			new->xprts[n++] = pos;
+		}
+		new->n = n;
+	}
+	old = rcu_replace_pointer(xps->xps_array, new, true);
+	if (old)
+		kfree_rcu(old, rcu);
+}
+
 static void xprt_switch_add_xprt_locked(struct rpc_xprt_switch *xps,
 		struct rpc_xprt *xprt)
 {
@@ -40,6 +75,7 @@ static void xprt_switch_add_xprt_locked(struct rpc_xprt_switch *xps,
 		xps->xps_net = xprt->xprt_net;
 	xps->xps_nxprts++;
 	xps->xps_nactive++;
+	xprt_switch_rebuild_array(xps);
 }
 
 /**
@@ -73,6 +109,7 @@ static void xprt_switch_remove_xprt_locked(struct rpc_xprt_switch *xps,
 		xps->xps_net = NULL;
 	smp_wmb();
 	list_del_rcu(&xprt->xprt_switch);
+	xprt_switch_rebuild_array(xps);
 }
 
 /**
@@ -159,6 +196,7 @@ struct rpc_xprt_switch *xprt_switch_alloc(struct rpc_xprt *xprt,
 		atomic_long_set(&xps->xps_queuelen, 0);
 		xps->xps_net = NULL;
 		INIT_LIST_HEAD(&xps->xps_xprt_list);
+		RCU_INIT_POINTER(xps->xps_array, NULL);
 		xps->xps_iter_ops = &rpc_xprt_iter_singular;
 		rpc_sysfs_xprt_switch_setup(xps, xprt, gfp_flags);
 		xprt_switch_add_xprt_locked(xps, xprt);
@@ -448,18 +486,47 @@ struct rpc_xprt *__xprt_switch_find_next_entry_roundrobin(struct list_head *head
 	return xprt_switch_find_first_entry(head);
 }
 
+/*
+ * As __xprt_switch_find_next_entry_roundrobin(): the first active
+ * transport after @cur, else the first active one, @cur included; or the
+ * first active one when @cur is NULL or no longer the switch's.
+ */
+static
+struct rpc_xprt *xprt_switch_array_next_roundrobin(struct rpc_xprt_switch *xps,
+		const struct rpc_xprt *cur)
+{
+	struct rpc_xprt_switch_array *a = rcu_dereference(xps->xps_array);
+	unsigned int i, start = 0;
+
+	if (!a)
+		return __xprt_switch_find_next_entry_roundrobin(&xps->xps_xprt_list,
+								cur);
+	for (i = 0; cur && i < a->n; i++) {
+		if (a->xprts[i] == cur) {
+			start = i + 1;
+			break;
+		}
+	}
+	for (i = 0; i < a->n; i++) {
+		struct rpc_xprt *pos = a->xprts[(start + i) % a->n];
+
+		if (xprt_is_active(pos))
+			return pos;
+	}
+	return NULL;
+}
+
 static
 struct rpc_xprt *xprt_switch_find_next_entry_roundrobin(struct rpc_xprt_switch *xps,
 		const struct rpc_xprt *cur)
 {
-	struct list_head *head = &xps->xps_xprt_list;
 	struct rpc_xprt *xprt;
 	unsigned int nactive;
 
 	for (;;) {
 		unsigned long xprt_queuelen, xps_queuelen;
 
-		xprt = __xprt_switch_find_next_entry_roundrobin(head, cur);
+		xprt = xprt_switch_array_next_roundrobin(xps, cur);
 		if (!xprt)
 			break;
 		xprt_queuelen = atomic_long_read(&xprt->queuelen);
