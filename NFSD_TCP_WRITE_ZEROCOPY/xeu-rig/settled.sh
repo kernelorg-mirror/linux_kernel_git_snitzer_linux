@@ -396,7 +396,10 @@ RTC_CPUS_SETTLED=$RTC_CPUS
 # svc_rtc_cpus, each counting as holding the weight.  Settled: none, and
 # the default weight 2.  EXP_RTC_SPILL_CPUS ("none" for empty) and
 # EXP_RTC_SPILL_WEIGHT hold a run to others.  A sunrpc without them is not
-# BAD while none are wanted.
+# BAD while none are wanted.  The code is gone at the tip since 19 November
+# (143e3df791c88, Mike: "please revert all code changes associated with the
+# spill at the tip of the tree"; FLAMEGRAPH round 154): a sunrpc built from
+# it has neither parameter.
 RTC_SPILL_CPUS=
 RTC_SPILL_WEIGHT=2
 RTC_SPILL_CPUS_SETTLED=$RTC_SPILL_CPUS

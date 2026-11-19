@@ -23,3 +23,11 @@ and through each, every second, nfsd's `rtc_stats` (debugfs: `placed
 cpu:n`, each CPU's connections, and `rebalanced`).  `placement.awk`
 gives each second's spread over nfsd's CPUs and, over the mpstat
 window, CPUs grouped by their mean connections beside their busy.
+
+**The spill's code is gone at the tip (Mike, 19 November: "please revert
+all code changes associated with the spill at the tip of the tree"):**
+`143e3df791c88`, "SUNRPC: Drop the rtc balance's spill onto other CPUs",
+reverts `219a15abdd219` and the rebalancer's use of the spill CPUs from
+`4c084f9754fe1`; `svc_xprt.o` builds at W=1 with no warning.  tardis2's
+sunrpc still has the two parameters, at none and weight 2, which is the
+same as not having them; this round runs on it.
