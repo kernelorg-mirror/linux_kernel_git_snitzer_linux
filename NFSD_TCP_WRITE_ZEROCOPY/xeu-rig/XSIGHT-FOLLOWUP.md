@@ -486,9 +486,66 @@ try. With the source each is a few lines, and a test is an xeu reload
 (Mike's to authorize). For the reply (X7), the two numbers, with the
 flamegraphs of `../FLAMEGRAPH/02-refs-valid/`.
 
+### X9. Small messages: flow steering, rings and coalescing (from FLAMEGRAPH rounds 150 to 152, 19 November)
+
+**What we measured (tardis2, xeu Release 17, 4 KiB random NFS READs at
+3.6 M a second, two ports, 4 rings of 256 a port).**  The server spends
+15.8 us of CPU a READ, some 9 of it in the network (round 150).  There
+are no extra packets to save: 0.87 in and 0.79 out a READ, pure ACKs
+0.09, no delayed ACKs or retransmits (round 151).  Where the softirqs go
+(round 152, t2-r1201, per READ):
+
+| | ring CPUs (0-7, 56-63) | nfsd's CPUs (8-55) |
+|---|---|---|
+| NET_RX softirqs | 0.348 | 0.447 |
+| of them RPS IPIs | 0.077 | **0.447** |
+| packets up the stack | 0.125 | **0.742** |
+
+The rings' own polls batch well enough: about 0.27 a READ for 0.87
+frames in and 0.79 completions out, some 6 a poll.  The cost is the
+hop: 86% of received frames are handed by RFS from the ring's CPU to
+the nfsd CPU that owns the connection, an IPI and a softirq of their
+own (1.66 frames each), with the skb's lines moving between cores and
+the reply's skb freed back on another (`tcp_wfree` is the top DRAM
+miss, 3.5% of them).  Every softirq on nfsd's CPUs is one of these IPIs.
+
+**What only the card and driver can remove.**
+
+1. **Accelerated RFS.**  xeu has no `ndo_rx_flow_steer`, ntuple filters
+   or `rx_cpu_rmap`.  With them the card steers each connection to a
+   ring whose vector is on the CPU that consumes it, and the hop goes.
+   Questions: can the E1 match a TCP 4-tuple to a ring, how many such
+   rules, and at what cost to insert and remove one?
+2. **Many small rings.**  The other way to land a frame on its CPU:
+   a ring a CPU, with RSS spreading flows over them and no RPS.  Each
+   ring posts its own receive buffers from the fixed region, which must
+   stay inside the L3 (32 MiB), so rings must shrink as they multiply:
+   48 rings of 32 post what 4 of 256 a port do now.  Questions: the
+   E1's limits on rings a function and the smallest ring that keeps
+   up (`XEU_MIN_RING_SIZE` is 16, "arbitrary"); at 8 rings a port, at
+   load, Release 15 once ran the region dry (`alloc_fail`).
+3. **Completion coalescing in the card.**  `ethtool -c` is not
+   supported; `xsl_rm_ring_config()` is passed 0 for
+   `cmpl_prod_refl_coalesce_val`, and `XSL_DMA_INT_COALESCE_MODE_HW`
+   is never used.  We stand in for it with NAPI's deferral (2 polls,
+   10 us timer).  Questions: what do the coalescing value and the HW
+   mode do, and can xeu expose them (and adaptive moderation) through
+   `ethtool -c`?
+4. **One NAPI context a ring pair.**  Each pair has two contexts and
+   two vectors, on two CPUs.  This one we could do ourselves:
+   `kernel-rpmtree` `081f549`, Patch16
+   `xeu-reap-a-TX-ring-s-completions-in-its-RX-ring-s-poll.patch`
+   (Release 18, parameter `tx_in_rx_napi`, needs `irq_msix_mask`).
+   Built, not yet loaded; its A/B is FLAMEGRAPH round 153, with 8 rings
+   of 128 a port (the same buffers posted) so that each ring CPU keeps
+   one pair.  Question for Xsight: any reason the two must stay apart?
+
+**Decides.**  Questions 1 to 3 go in the next reply (X7).  The A/B of
+4 is ours, and an xeu reload is Mike's to authorize.
+
 ### X7. The reply
 
-Once X1 to X5 have results: draft `../xsight-reply-2.txt` from the
+Once X1 to X5 have results (and X9's questions 1 to 3 with them): draft `../xsight-reply-2.txt` from the
 checklist's "For the reply to them", in the note's style (results
 first, then each point with its evidence, short questions). Leading
 it: rx_ip_align restated around the payload (X3), and the DRAM being
