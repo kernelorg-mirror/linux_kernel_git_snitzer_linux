@@ -194,9 +194,18 @@ unx_validate(struct rpc_task *task, struct xdr_stream *xdr)
 	if (!p)
 		return -EIO;
 
-	auth->au_verfsize = XDR_QUADLEN(size) + 2;
-	auth->au_rslack = XDR_QUADLEN(size) + 2;
-	auth->au_ralign = XDR_QUADLEN(size) + 2;
+	/*
+	 * Every AUTH_UNIX client shares unix_auth, and a server's verifier
+	 * hardly ever changes size: store only a change, so that the line
+	 * every call reads is not written by every reply.
+	 */
+	size = XDR_QUADLEN(size) + 2;
+	if (unlikely(auth->au_verfsize != size))
+		auth->au_verfsize = size;
+	if (unlikely(auth->au_rslack != size))
+		auth->au_rslack = size;
+	if (unlikely(auth->au_ralign != size))
+		auth->au_ralign = size;
 	return 0;
 }
 
