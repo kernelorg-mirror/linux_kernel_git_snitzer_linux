@@ -14,10 +14,12 @@ END {
 		printf "%-14s %-6s %-4s %-4s %9d %9d %s\n", ip, d["rport", k], c, (("ran_on", k) in d) ? d["ran_on", k] : "-", r, t, d["tc", k] | "sort -k1,1 -k3,3n"
 		n++; if (r > t) nr++; else { nt++; tl = tl " " ip ":" d["rport", k] "(cpu " c ")" }
 		if (c >= 0 && (c < 8 || c > 55)) { no++; nl = nl " " ip ":" d["rport", k] "(cpu " c ")" }
+		if (c < 0) { nu++; ul = ul " " ip ":" d["rport", k] "(ran " d["ran_on", k] ")" }
 		rs += r; ts += t
 	}
 	close("sort -k1,1 -k3,3n")
 	printf "connections %d: %d through the rtc work item, %d through threads%s\n", n, nr, nt, tl
 	printf "work CPUs off nfsd's 8-55: %d%s\n", no, nl
+	printf "never placed (work CPU -1): %d%s\n", nu, ul
 	printf "calls a second: rtc %d, threads %d\n", rs, ts
 }
