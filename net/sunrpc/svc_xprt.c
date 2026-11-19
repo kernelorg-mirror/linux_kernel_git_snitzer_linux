@@ -1837,8 +1837,19 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 	const struct cpumask *allowed = svc_rtc_allowed();
 	int cpu = READ_ONCE(conn->cpu);
 
-	if (!softirq)
-		return cpu;
+	/*
+	 * Segments that arrive while the work item holds the socket are
+	 * processed when it releases it, in process context, so a busy
+	 * connection can go without a softirq receive for as long as it stays
+	 * busy.  Never placed, it would run wherever its work item last ran,
+	 * out of the balance's sight.  Place it on such a receive too, without
+	 * marking this CPU as one that takes receives: it is the work item's.
+	 */
+	if (!softirq) {
+		if (cpu >= 0)
+			return cpu;
+		goto place;
+	}
 	/*
 	 * A CPU named in svc_rtc_cpus is one the work items are meant to run
 	 * on.  A receive there was steered to it (RPS or RFS hands a flow's
@@ -1852,6 +1863,7 @@ VISIBLE_IF_KUNIT int svc_rtc_place(struct svc_serv *serv,
 	    (cpu == rx_cpu || !cpumask_test_cpu(cpu, serv->sv_rtc_rxcpus)) &&
 	    (!allowed || cpumask_test_cpu(cpu, allowed)))
 		return cpu;
+place:
 	cpu = -1;
 	if (READ_ONCE(svc_rtc_balance)) {
 		const struct cpumask *node = cpumask_of_node(cpu_to_node(rx_cpu));
