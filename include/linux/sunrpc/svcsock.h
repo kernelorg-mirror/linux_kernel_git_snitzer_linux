@@ -215,6 +215,16 @@ struct svc_tcp_rx_state *svc_tcp_rx_state_alloc_entries(unsigned long entries,
 void svc_tcp_rx_state_free(struct svc_tcp_rx_state *state);
 struct svc_tcp_rx_budget *svc_tcp_rx_budget_read_for(struct svc_sock *svsk);
 
+/*
+ * A program's hook that names the target of a call whose payload is about
+ * to be loaned, from the record's first @len bytes at @head (from the
+ * xid): a nonzero key for the filesystem it writes, 0 for none known.
+ */
+typedef u32 (*svc_rx_target_fn)(u32 vers, u32 proc, const __be32 *head,
+				unsigned int len);
+int svc_rx_target_register(u32 program, svc_rx_target_fn fn);
+void svc_rx_target_unregister(u32 program);
+
 #if IS_ENABLED(CONFIG_KUNIT)
 extern unsigned int svc_tcp_rx_copy_below;
 
@@ -318,15 +328,6 @@ void svc_tcp_rx_credit_release(struct svc_tcp_rx_state *state);
 void svc_tcp_rx_credit_forget(struct svc_sock *svsk);
 void svc_tcp_rx_wait_init(struct svc_sock *svsk);
 
-/*
- * A program's hook that names the target of a call whose payload is about
- * to be loaned, from the record's first @len bytes at @head (from the
- * xid): a nonzero key for the filesystem it writes, 0 for none known.
- */
-typedef u32 (*svc_rx_target_fn)(u32 vers, u32 proc, const __be32 *head,
-				unsigned int len);
-int svc_rx_target_register(u32 program, svc_rx_target_fn fn);
-void svc_rx_target_unregister(u32 program);
 bool svc_tcp_rx_budget_copy(struct svc_sock *svsk);
 long svc_tcp_rx_budget_avail(void);
 unsigned int svc_tcp_rx_budget_cost_factor(void);
