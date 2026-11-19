@@ -48,3 +48,34 @@ partition on nvme8 also logs "FAT-fs (nvme8n1p1): Volume was not
 properly unmounted" every few minutes (23:33, 23:40, 23:48, 23:59),
 which the pass does not count.  The client back on `updates/` and the
 settled setting after.  Round 138 needs a READ pass that passes.
+
+## P's READ pass again, and P's profile (00:13 to 00:24)
+
+- t2-r1135, the READ pass on P: **82.32 GB/s PASS**, no new kernel
+  warning (B read 82.38 at t2-r1123).
+- t2-r1136, round 137's profile on P (`prof-both137.sh`): 3.52 M IOPS
+  (1.74 / 1.78 M), p99 4.36 / 3.52 ms, 15.64 / 11.73 us of CPU a READ.
+  P's modules were loaded from `/root/zc-ckern/IOS`, which perf does
+  not look in, so `cli-self.txt` and `cli-children.txt` were made again
+  with `--symfs` holding P's modules and `--kallsyms=/proc/kallsyms`.
+
+| Client function (self) | t2-r1128 (B) | t2-r1136 (P) |
+|---|---|---|
+| `rpc_count_iostats_metrics` | 2.17% | **1.61%** |
+| `_raw_spin_lock` | 6.55% | 6.04% |
+| `native_queued_spin_lock_slowpath` | 2.25% | 2.29% |
+| `xprt_request_enqueue_receive` | 2.05% | 2.04% |
+| `nfs_fattr_init` | 1.75% | 1.69% |
+| `rpcauth_refreshcred` | 1.62% | 1.23% |
+
+The lock is gone, but most of the function's time is not: 1.61% of the
+client's samples stay in it.  `objdump` of P's `sunrpc.ko` puts its hot
+spot (0x59c82, `perf annotate` disassembled another copy of the module
+and is not to be trusted here) right after `movslq 0x1d8(%r12),%rdx`,
+the load of `req->rq_ntrans`: the first read of the task's `rpc_rqst`
+in the completion, a cache line last written on another CPU (the
+receive).  So what round 137 counted against the iostats was mostly
+the completing CPU's first touch of the request, which moves to the
+next reader if the counting goes; the counters and their lock were
+about 0.56% (0.08 us a READ).  That fits the A/B: no change in the
+client's CPU a READ, a busiest CPU a few points lower.
