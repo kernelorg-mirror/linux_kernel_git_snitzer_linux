@@ -8,7 +8,10 @@
 # nfs4k.sh <n>:<iodepth> (96), the client on its updates/ stack, and
 # from the load's eighth second two snapshots 8 s apart on both hosts
 # (nstat absolute, the ports' link counters, the NIC's interrupts,
-# /proc/softirqs, the RPC and READ counts).  Only reads; into
+# /proc/softirqs, the RPC and READ counts; since round 152 also
+# /proc/net/softnet_stat and NET_RX split between the CPUs that host the
+# NIC's vectors, "ring", and the rest, "other": packets processed, RPS
+# IPIs received, squeezes).  Only reads; into
 # $L/t2-r<n>/: pk-{srv,cli}-{0,1}.txt and packets.txt.
 cd /home/serviceadmin/snitm/kernel/linux/NFSD_TCP_WRITE_ZEROCOPY/xeu-rig || exit 1
 . ./common.sh
@@ -23,6 +26,10 @@ SNAP='snap() {
 	awk "/NET_RX|NET_TX/ { s = 0; for (k = 2; k <= NF; k++) s += \$k; sub(\":\", \"\", \$1); print \"softirq_\" \$1, s }" /proc/softirqs
 	awk "/^rpc / { print \"rpc_calls\", \$2 } /^proc3 / { print \"nfs3_read\", \$9 }" $3
 	nstat -asz | awk "NR>1 { print \$1, \$2 }"
+	R=$(for i in $(awk -v p="$2" "NR>1 && \$NF ~ p { sub(\":\", \"\", \$1); print \$1 }" /proc/interrupts); do cat /proc/irq/$i/effective_affinity_list; done | tr "\n" ,)
+	RING="BEGIN { n = split(r, a, \",\"); for (k = 1; k <= n; k++) { if (a[k] == \"\") continue; m = split(a[k], b, \"-\"); for (c = b[1]; c <= b[m]; c++) ring[c] = 1 } }"
+	awk -v r="$R" "$RING { c = strtonum(\"0x\" \$13); g = (c in ring) ? \"ring\" : \"other\"; p[g] += strtonum(\"0x\" \$1); q[g] += strtonum(\"0x\" \$10); s[g] += strtonum(\"0x\" \$3); nc[g]++ } END { for (g in p) print \"softnet_processed_\" g, p[g]; for (g in q) print \"softnet_rps_ipis_\" g, q[g]; for (g in s) print \"softnet_squeeze_\" g, s[g]; for (g in nc) print \"cpus_\" g, nc[g] }" /proc/net/softnet_stat
+	awk -v r="$R" "$RING /NET_RX/ { for (k = 2; k <= NF; k++) { g = ((k - 2) in ring) ? \"ring\" : \"other\"; s[g] += \$k } } END { for (g in s) print \"softirq_NET_RX_\" g, s[g] }" /proc/softirqs
 }'
 (
 	W=$O/run/wire-sec.tsv
