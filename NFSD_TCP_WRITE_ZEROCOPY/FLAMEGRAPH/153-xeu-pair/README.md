@@ -64,3 +64,11 @@ written with `ethtool -X`.
 Release 17 back at `num_rings=4` and B twice on the plain settled
 setting (t2-r1208, r1209).  `packets.sh` now prints each server ring's
 frames a second, so every run shows the spread over rings and ports.
+
+**And t2-r1204 is no fair R8 either** (3.55 M, 1.71 / 1.84 M, server
+91% busy, 16.4 us a READ): `twoport.sh` gives every ring 128 entries for
+a load and puts them back to 256 after, so the settled IOPS load has
+4 x 128 a port, and R8 posted 8 x 128, twice the receive buffers.
+`ab-pair2.sh` was stopped before its first run and now runs R8 P R8 P at
+8 x 64 a port (t2-r1205 to r1208), then B twice on Release 17
+(t2-r1209, r1210).
