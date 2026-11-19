@@ -50,7 +50,7 @@ for n in "$@"; do
 		awk '$3 ~ /^[0-9]+$/ && $3 != $2 { printf "%s %d; ", $1, $3 - $2 } END { print "" }' | sed 's/^/    rtc counters, seconds 0-19: /'
 	[ -s $L/t2-r$n/conn-bpf.txt ] && awk -f $P/conn.awk $L/t2-r$n/conn-bpf.txt | tee $L/t2-r$n/conn.txt | tail -3 | sed 's/^/    /'
 	# a connection whose work item ran off its work CPU (round 156's bug)
-	[ -s $L/t2-r$n/conn.txt ] && awk 'NR > 1 && $3 ~ /^[0-9]+$/ && $3 != $4 { n++; l = l " " $1 ":" $2 "(cpu " $3 ", ran " $4 ")" } END { printf "    connections off their work CPU: %d%s\n", n, l }' $L/t2-r$n/conn.txt
+	[ -s $L/t2-r$n/conn.txt ] && awk 'NR > 1 && $1 ~ /^[0-9.]+$/ && $3 ~ /^[0-9]+$/ && $3 != $4 { n++; l = l " " $1 ":" $2 "(cpu " $3 ", ran " $4 ")" } END { printf "    connections off their work CPU: %d%s\n", n, l }' $L/t2-r$n/conn.txt
 
 done
 say "placement all done"
