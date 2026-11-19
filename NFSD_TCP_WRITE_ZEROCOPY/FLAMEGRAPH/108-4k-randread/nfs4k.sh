@@ -44,7 +44,7 @@ for run in "$@"; do
 	rc=$?
 	wait
 	dmesg > $O/dmesg.1
-	hung=$(diff $O/dmesg.0 $O/dmesg.1 | grep -v 'tracing to debugfs is deprecated' | grep -c -i -E 'hung|blocked for more|soft lockup|rcu.*stall|WARNING|BUG|NETDEV WATCHDOG|timed out|timeout')
+	hung=$(diff $O/dmesg.0 $O/dmesg.1 | grep '^>' | grep -v 'tracing to debugfs is deprecated' | grep -c -i -E 'hung|blocked for more|soft lockup|rcu.*stall|WARNING|BUG|NETDEV WATCHDOG|timed out|timeout')
 	iops=$(awk '/^  read:/ {sub(/k$/, "", $4); s += $4} END {printf "%.2f", s / 1000}' $O/run.log)
 	ports=$(awk '/^  read:/ {sub(/k$/, "", $4); printf "%s%.2f", n++ ? " / " : "", $4 / 1000}' $O/run.log)
 	lat=$(awk '/^  read:/ {printf "%s%s / %s", n++ ? "; " : "", $7, $10}' $O/run.log)
