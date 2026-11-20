@@ -211,6 +211,8 @@ enum xprt_transports {
 };
 
 struct rpc_sysfs_xprt;
+#define XPRT_RECV_TABLE_SIZE	256	/* a power of two */
+
 struct rpc_xprt {
 	struct kref		kref;		/* Reference count */
 	const struct rpc_xprt_ops *ops;		/* transport methods */
@@ -294,6 +296,7 @@ struct rpc_xprt {
 #endif /* CONFIG_SUNRPC_BACKCHANNEL */
 
 	struct rb_root		recv_queue;	/* Receive queue */
+	unsigned int		recv_table_count; /* requests in recv_table */
 
 	struct {
 		unsigned long		bind_count,	/* total number of binds */
@@ -322,6 +325,13 @@ struct rpc_xprt {
 	const struct xprt_class	*xprt_class;
 	struct rpc_sysfs_xprt	*xprt_sysfs;
 	bool			main; /*mark if this is the 1st transport */
+	/*
+	 * Requests awaiting a reply, by the low bits of their XID, which a
+	 * transport hands out in sequence; one whose slot is taken is in
+	 * recv_queue.  Protected by queue_lock.
+	 */
+	struct rpc_rqst		*recv_table[XPRT_RECV_TABLE_SIZE]
+						____cacheline_aligned;
 };
 
 #if defined(CONFIG_SUNRPC_BACKCHANNEL)

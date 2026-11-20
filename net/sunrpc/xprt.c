@@ -842,14 +842,21 @@ xprt_has_timer(const struct rpc_xprt *xprt)
 	return xprt->idle_timeout != 0;
 }
 
+/* No request awaiting a reply: neither in recv_table nor in recv_queue */
+static bool
+xprt_recv_queue_empty(const struct rpc_xprt *xprt)
+{
+	return !data_race(READ_ONCE(xprt->recv_table_count)) &&
+	       data_race(RB_EMPTY_ROOT(&xprt->recv_queue));
+}
+
 static void
 xprt_schedule_autodisconnect(struct rpc_xprt *xprt)
 	__must_hold(&xprt->transport_lock)
 {
 	xprt->last_used = jiffies;
 	/* A racing enqueue cancels the timer after publishing the request. */
-	if (data_race(RB_EMPTY_ROOT(&xprt->recv_queue)) &&
-	    xprt_has_timer(xprt))
+	if (xprt_recv_queue_empty(xprt) && xprt_has_timer(xprt))
 		mod_timer(&xprt->timer, xprt->last_used + xprt->idle_timeout);
 }
 
@@ -858,7 +865,7 @@ xprt_init_autodisconnect(struct timer_list *t)
 {
 	struct rpc_xprt *xprt = timer_container_of(xprt, t, timer);
 
-	if (!RB_EMPTY_ROOT(&xprt->recv_queue))
+	if (!xprt_recv_queue_empty(xprt))
 		return;
 	/* Reset xprt->last_used to avoid connect/autodisconnect cycling */
 	xprt->last_used = jiffies;
@@ -1004,12 +1011,30 @@ xprt_xid_cmp(__be32 xid1, __be32 xid2)
 	return XID_RB_RIGHT;
 }
 
+/*
+ * A request awaiting a reply is found by its XID.  A transport hands out
+ * XIDs in sequence, so those outstanding at once differ in their low
+ * bits, and each request goes in recv_table by them: one store to queue
+ * it and one load to find it, where an rb-tree walk reads a request last
+ * written on another CPU at every level.  A request whose slot is taken,
+ * by one outstanding since as many XIDs ago as the table has slots, goes
+ * in the recv_queue rb-tree instead.  All under xprt->queue_lock.
+ */
+static struct rpc_rqst **
+xprt_recv_slot(struct rpc_xprt *xprt, __be32 xid)
+{
+	return &xprt->recv_table[(__force u32)xid & (XPRT_RECV_TABLE_SIZE - 1)];
+}
+
 static struct rpc_rqst *
 xprt_request_rb_find(struct rpc_xprt *xprt, __be32 xid)
 {
 	struct rb_node *n = xprt->recv_queue.rb_node;
 	struct rpc_rqst *req;
 
+	req = *xprt_recv_slot(xprt, xid);
+	if (req && req->rq_xid == xid)
+		return req;
 	while (n != NULL) {
 		req = rb_entry(n, struct rpc_rqst, rq_recv);
 		switch (xprt_xid_cmp(xid, req->rq_xid)) {
@@ -1029,10 +1054,17 @@ xprt_request_rb_find(struct rpc_xprt *xprt, __be32 xid)
 static void
 xprt_request_rb_insert(struct rpc_xprt *xprt, struct rpc_rqst *new)
 {
+	struct rpc_rqst **slot = xprt_recv_slot(xprt, new->rq_xid);
 	struct rb_node **p = &xprt->recv_queue.rb_node;
 	struct rb_node *n = NULL;
 	struct rpc_rqst *req;
 
+	if (!*slot) {
+		*slot = new;
+		WRITE_ONCE(xprt->recv_table_count, xprt->recv_table_count + 1);
+		return;
+	}
+	WARN_ON_ONCE(*slot == new);
 	while (*p != NULL) {
 		n = *p;
 		req = rb_entry(n, struct rpc_rqst, rq_recv);
@@ -1055,6 +1087,13 @@ xprt_request_rb_insert(struct rpc_xprt *xprt, struct rpc_rqst *new)
 static void
 xprt_request_rb_remove(struct rpc_xprt *xprt, struct rpc_rqst *req)
 {
+	struct rpc_rqst **slot = xprt_recv_slot(xprt, req->rq_xid);
+
+	if (*slot == req) {
+		*slot = NULL;
+		WRITE_ONCE(xprt->recv_table_count, xprt->recv_table_count - 1);
+		return;
+	}
 	rb_erase(&req->rq_recv, &xprt->recv_queue);
 }
 
