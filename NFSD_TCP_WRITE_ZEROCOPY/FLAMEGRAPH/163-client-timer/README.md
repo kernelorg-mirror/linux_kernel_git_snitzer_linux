@@ -41,7 +41,7 @@ warning in either; the client back on B after.
   reads 3.535 M, under 1% below T.
 - The client's CPU a READ is 0.04 us lower on T, the way round 161's
   0.07 us points and below what six runs can resolve.
-- **Kept** (Mike to say): `4352483fa4691` is a small change with no
-  cost and passes both passes.  The client's `updates/` still holds
+- **Kept (Mike, 20 November: "yes, let's keep 4352483fa4691")**: a
+  small change with no cost that passes both passes.  The client's `updates/` still holds
   round 149's stack; T is in `/root/zc-ckern/TD/root/` for
   `cswap131.sh`.
