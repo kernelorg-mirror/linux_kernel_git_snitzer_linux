@@ -1168,8 +1168,17 @@ xprt_request_enqueue_receive(struct rpc_task *task)
 	set_bit(RPC_TASK_NEED_RECV, &task->tk_runstate);
 	spin_unlock(&xprt->queue_lock);
 
-	/* Turn off autodisconnect */
-	timer_delete_sync(&xprt->timer);
+	/*
+	 * Turn off autodisconnect.  The timer is armed only when the
+	 * receive queue is empty, so with requests outstanding it is
+	 * nearly never pending, and timer_delete_sync() would take the
+	 * timer base's lock for nothing on every request.  A timer armed
+	 * by a racing xprt_schedule_autodisconnect() that this misses
+	 * finds the request on the receive queue when it fires and does
+	 * nothing.
+	 */
+	if (timer_pending(&xprt->timer))
+		timer_delete_sync(&xprt->timer);
 	return 0;
 }
 
