@@ -22,3 +22,27 @@ compiler notes; sunrpc `F55891CC4033B4C039DED19`).
 `72B6522F5FD84CCD583F45D`) against X, B X B X B X (t2-r1245 to
 r1250), then X's WRITE pass (r1251) and READ pass (r1252), the client
 back on B.
+
+## The A/B (20 November, 01:11 to 01:33)
+
+| run | arm | IOPS | a / b M | p99 ms a / b | server us a READ | client us a READ | client busy (busiest) |
+|---|---|---|---|---|---|---|---|
+| `t2-r1245` | B | 3.49 M | 1.75 / 1.74 | 3.26 / 3.16 | 14.67 | 11.42 | 83% (100%) |
+| `t2-r1246` | X | 3.51 M | 1.76 / 1.75 | 3.19 / 3.29 | 14.77 | 11.08 | 81% (93%) |
+| `t2-r1247` | B | 3.58 M | 1.79 / 1.80 | 2.97 / 3.00 | 14.66 | 11.26 | 84% (92%) |
+| `t2-r1248` | X | 3.42 M | 1.67 / 1.75 | 4.49 / 4.11 | 15.16 | 11.09 | 79% (92%) |
+| `t2-r1249` | B | 3.56 M | 1.81 / 1.75 | 3.00 / 3.26 | 14.74 | 11.33 | 84% (99%) |
+| `t2-r1250` | X | 3.53 M | 1.77 / 1.76 | 3.00 / 3.00 | 14.87 | 10.88 | 80% (96%) |
+| mean | B | 3.54 M | | | 14.69 | 11.34 | |
+| mean | X | 3.49 M | | | 14.93 | 11.02 | |
+
+- **The client's CPU a READ is 0.32 us lower on X (2.8%)**, every X run
+  below every B run (10.88 to 11.09 against 11.26 to 11.42): about half
+  of what round 161 put on the tree, the rest being the request's own
+  line, which any lookup reads.
+- **IOPS do not follow:** the server is the limit (its nfsd CPUs at
+  100%), and X's t2-r1248 is one of the server's slow runs (15.16 us a
+  READ, port a 1.67 M), as t2-r1234 and t2-r1241 were.  Its p99 of 4.5
+  ms did not come back in t2-r1250 (3.00 on both ports).
+- **Kept (Mike, 20 November: "keep this change")**, `0e9aa447e911e`;
+  its WRITE and READ passes follow.
