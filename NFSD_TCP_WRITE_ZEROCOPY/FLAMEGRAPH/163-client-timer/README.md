@@ -42,6 +42,7 @@ warning in either; the client back on B after.
 - The client's CPU a READ is 0.04 us lower on T, the way round 161's
   0.07 us points and below what six runs can resolve.
 - **Kept (Mike, 20 November: "yes, let's keep 4352483fa4691")**: a
-  small change with no cost that passes both passes.  The client's `updates/` still holds
-  round 149's stack; T is in `/root/zc-ckern/TD/root/` for
-  `cswap131.sh`.
+  small change with no cost that passes both passes.  Installed in the client's `updates/` on
+  20 November (Mike: "do install it in client's updates/"), sunrpc
+  `72B6522F5FD84CCD583F45D` loaded; round 149's stack is kept in
+  `/root/zc-ckern/updates-f5c0543b9f377/`.

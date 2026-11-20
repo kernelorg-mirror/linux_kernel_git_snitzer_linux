@@ -295,13 +295,16 @@ says why WRITEs cannot reach it.
   541's own: since 18 November, late (Mike: "yes, put the reverted
   stack in the client's updates/"), the client's
   `/lib/modules/7.3.3-16.hs.541.canary.el9.x86_64/updates/` holds the
-  17 NFS client modules built from `f5c0543b9f377` since 19 November
-  (Mike: "yes, put it in the client's updates/"): the reverts, FLAMEGRAPH
-  round 145's two fixes and round 149's round-robin array (sunrpc
-  `1EFC577AC45E5EEF6EC1592`; `COMMIT` and `README` beside them; the
-  stacks before, from `bdf70175fc522` (sunrpc `036CCE7D414F6EAC3D6FDDD`)
-  and `9d2c9fcede7b6` (sunrpc `2355B960B6A9951899AF6B4`), are in the
-  client's `/root/zc-ckern/updates-bdf70175fc522/` and
+  17 NFS client modules built from `f5c0543b9f377` with `4352483fa4691`
+  since 20 November (Mike: "do install it in client's updates/"): the
+  reverts, FLAMEGRAPH round 145's two fixes, round 149's round-robin
+  array and round 163's idle timer (sunrpc `72B6522F5FD84CCD583F45D`;
+  `COMMIT` and `README` beside them; the stacks before, from
+  `f5c0543b9f377` (sunrpc `1EFC577AC45E5EEF6EC1592`), `bdf70175fc522`
+  (sunrpc `036CCE7D414F6EAC3D6FDDD`) and `9d2c9fcede7b6` (sunrpc
+  `2355B960B6A9951899AF6B4`), are in the client's
+  `/root/zc-ckern/updates-f5c0543b9f377/`,
+  `/root/zc-ckern/updates-bdf70175fc522/` and
   `/root/zc-ckern/updates-9d2c9fcede7b6/`), so
   `modprobe`, a boot and `cswap131.sh stock` all load it.**  nfsd is
   not built, so the rpm's nfsd no longer loads on the client.  Until a
